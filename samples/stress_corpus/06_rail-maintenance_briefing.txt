@@ -1,0 +1,3 @@
+Rail Maintenance briefing AXM-06-01
+
+Program TRACK-18 in Itarsi tracks the axle sensor audit plan on 2026-04-27. The briefing records bearing heat as the primary coarse memory cue and lists sensor drift at 2.4 millimeters. Analysts must watch for false hotbox alert and should calibrate platform reader. Partner desk: Rail Diagnostics.

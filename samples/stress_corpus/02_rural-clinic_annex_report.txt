@@ -1,0 +1,3 @@
+Annex report AXM-02-05
+
+The formal annex for AAROGYA-27 says cold-chain vaccine route depends on cross-checking briefing notes, dashboard OCR, and transcript evidence. It recommends reviewing thermal breach beside storage temperature and treating generator battery sag as the final approval gate.

@@ -1,0 +1,3 @@
+Audit log AXM-01-06
+
+Audit trail for KAVERI-14: source desk AgriWatch Cell; place Nashik; date 2026-04-12; tracked value soil moisture equals 31 percent. The resolved operator action is 'move spare valves before rainfall', and the unresolved risk remains 'pump relay overload'.

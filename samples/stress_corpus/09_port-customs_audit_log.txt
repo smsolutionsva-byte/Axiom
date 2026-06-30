@@ -1,0 +1,3 @@
+Audit log AXM-09-06
+
+Audit trail for SAGAR-44: source desk Port Risk Unit; place Kandla; date 2026-05-07; tracked value scan backlog equals 116 containers. The resolved operator action is 'open lane three', and the unresolved risk remains 'seal tamper pattern'.

@@ -1,0 +1,3 @@
+Dashboard OCR AXM-04-04
+
+Visible panel: 'SURAKSHA-33 / Pune'. Alert card: 'credential replay'. Metric tile: 'click rate: 11 percent'. Action banner: 'rotate helpdesk tokens'. The screenshot OCR also shows the risk label 'shared password reuse'.

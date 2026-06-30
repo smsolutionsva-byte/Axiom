@@ -1,0 +1,3 @@
+Cyber Training briefing AXM-04-01
+
+Program SURAKSHA-33 in Pune tracks the phishing drill plan on 2026-04-21. The briefing records credential replay as the primary coarse memory cue and lists click rate at 11 percent. Analysts must watch for shared password reuse and should rotate helpdesk tokens. Partner desk: Security Education Team.

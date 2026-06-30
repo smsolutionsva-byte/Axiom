@@ -1,0 +1,3 @@
+Annex report AXM-01-05
+
+The formal annex for KAVERI-14 says drip irrigation depends on cross-checking briefing notes, dashboard OCR, and transcript evidence. It recommends reviewing canal reserve beside soil moisture and treating pump relay overload as the final approval gate.

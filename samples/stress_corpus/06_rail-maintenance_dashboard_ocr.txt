@@ -1,0 +1,3 @@
+Dashboard OCR AXM-06-04
+
+Visible panel: 'TRACK-18 / Itarsi'. Alert card: 'bearing heat'. Metric tile: 'sensor drift: 2.4 millimeters'. Action banner: 'calibrate platform reader'. The screenshot OCR also shows the risk label 'false hotbox alert'.

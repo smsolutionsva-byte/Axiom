@@ -160,6 +160,7 @@ def coverage_select(
     candidates: list[tuple[str, float]],
     *,
     top_k: int,
+    min_relevance: float = 0.0,
 ) -> list[tuple[str, float]]:
     query_tokens = tokenize(query)
     selected: list[tuple[str, float]] = []
@@ -168,12 +169,12 @@ def coverage_select(
     seen_pages: set[tuple[str, int | None]] = set()
     seen_modalities: set[str] = set()
 
-    pool: list[tuple[str, float, sqlite3.Row]] = []
+    pool: list[tuple[str, float, sqlite3.Row, float]] = []
     for chunk_id, base_score in candidates:
         chunk = get_chunk(conn, chunk_id)
         if chunk is None or chunk["chunk_kind"] != "child":
             continue
-        overlap = lexical_overlap(query_tokens, chunk["text_content"])
+        overlap = lexical_overlap(query_tokens, evidence_search_text(chunk))
         novelty = 0.0
         if chunk["file_id"] not in seen_files:
             novelty += 0.018
@@ -183,10 +184,12 @@ def coverage_select(
             novelty += 0.006
         risk = prompt_injection_risk(chunk["text_content"]) * 0.025
         redundancy = max((chunk_redundancy(chunk, existing) for existing in selected_chunks), default=0.0)
-        pool.append((chunk_id, base_score + overlap * 0.04 + novelty - redundancy * 0.025 - risk, chunk))
+        pool.append((chunk_id, base_score + overlap * 0.085 + novelty - redundancy * 0.025 - risk, chunk, overlap))
 
-    for chunk_id, score, chunk in sorted(pool, key=lambda item: item[1], reverse=True):
+    for chunk_id, score, chunk, overlap in sorted(pool, key=lambda item: item[1], reverse=True):
         if any(chunk_id == selected_id for selected_id, _ in selected):
+            continue
+        if min_relevance and selected and overlap < min_relevance:
             continue
         redundancy = max((chunk_redundancy(chunk, existing) for existing in selected_chunks), default=0.0)
         if redundancy > 0.92 and len(selected) >= 1:
@@ -228,9 +231,38 @@ def rerank(conn: sqlite3.Connection, query: str, candidates: list[tuple[str, flo
         chunk = get_chunk(conn, chunk_id)
         if chunk is None:
             continue
-        overlap = lexical_overlap(query_tokens, chunk["text_content"])
-        reranked.append((chunk_id, base_score + overlap * 0.05))
+        overlap = lexical_overlap(query_tokens, evidence_search_text(chunk))
+        reranked.append((chunk_id, base_score + overlap * 0.095))
     return sorted(reranked, key=lambda item: item[1], reverse=True)
+
+
+def evidence_search_text(row: sqlite3.Row) -> str:
+    file_name = str(row["file_name"] or "")
+    file_type = str(row["file_type"] or "")
+    modality = str(row["modality"] or "")
+    labels = [file_name, file_type, modality, row["text_content"]]
+    labels.append(evidence_kind_terms(file_name=file_name, file_type=file_type, modality=modality))
+    return " ".join(str(part) for part in labels if part)
+
+
+def evidence_kind_terms(*, file_name: str, file_type: str, modality: str) -> str:
+    lowered_name = file_name.lower()
+    lowered_type = file_type.lower()
+    lowered_modality = modality.lower()
+    terms: list[str] = []
+    if lowered_modality in {"transcript", "audio"} or lowered_type in {"wav", "mp3", "m4a", "ogg"}:
+        terms.append("voice transcript audio recording")
+    if lowered_modality in {"ocr", "image"} or lowered_type in {"png", "jpg", "jpeg", "webp"}:
+        terms.append("screenshot ocr image visual evidence")
+    if lowered_type in {"doc", "docx"}:
+        terms.append("document brief notes")
+    if lowered_type == "pdf":
+        terms.append("pdf annexure report")
+    if "screen" in lowered_name or "screenshot" in lowered_name:
+        terms.append("screenshot")
+    if "voice" in lowered_name or "call" in lowered_name:
+        terms.append("voice transcript")
+    return " ".join(terms)
 
 
 def make_hit(conn: sqlite3.Connection, child_id: str, score: float, query: str) -> SearchHit | None:
@@ -271,6 +303,13 @@ def make_snippet(text: str, query: str, radius: int = 180) -> str:
     lower_text = text.lower()
     tokens = tokenize(query)
     positions = [lower_text.find(token) for token in tokens if lower_text.find(token) != -1]
+    if not positions:
+        for token in tokens:
+            if len(token) > 4 and token.endswith("s"):
+                singular = token[:-1]
+                index = lower_text.find(singular)
+                if index != -1:
+                    positions.append(index)
     if not positions:
         return text[: radius * 2].strip()
     center = min(positions)

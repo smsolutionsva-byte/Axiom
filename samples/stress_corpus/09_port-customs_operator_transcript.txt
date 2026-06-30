@@ -1,0 +1,5 @@
+Operator transcript AXM-09-03
+
+00:03 Operator: SAGAR-44 is active in Kandla.
+00:12 Analyst: Confirm whether manifest mismatch connects to seal tamper pattern.
+00:27 Operator: Yes, the container scan triage record says to open lane three after scan backlog reached 116 containers.

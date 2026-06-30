@@ -1,0 +1,3 @@
+Annex report AXM-11-05
+
+The formal annex for NIRAMAY-88 says fever cluster survey depends on cross-checking briefing notes, dashboard OCR, and transcript evidence. It recommends reviewing mosquito density beside rapid test positivity and treating standing water pocket as the final approval gate.

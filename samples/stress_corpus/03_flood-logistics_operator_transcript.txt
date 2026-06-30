@@ -1,0 +1,5 @@
+Operator transcript AXM-03-03
+
+00:03 Operator: BRAHMAPUTRA-09 is active in Majuli.
+00:12 Analyst: Confirm whether jetty queue connects to bridge approach washout.
+00:27 Operator: Yes, the boat fuel staging record says to reroute via north ferry after diesel reserve reached 420 liters.

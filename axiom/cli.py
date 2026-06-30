@@ -71,6 +71,8 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark.add_argument("--corpus", default=None, help="Optional file/folder to ingest before benchmarking")
     benchmark.add_argument("--modes", default=",".join(DEFAULT_MODES), help="Comma-separated modes")
     benchmark.add_argument("--top-k", type=int, default=5)
+    benchmark.add_argument("--case-offset", type=int, default=0, help="Skip this many benchmark cases before running")
+    benchmark.add_argument("--case-limit", type=int, default=None, help="Run only this many benchmark cases")
     benchmark.add_argument("--out", default="exports/benchmarks")
     benchmark.add_argument("--label", default="biorag")
     benchmark.add_argument("--json", action="store_true")
@@ -332,6 +334,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.corpus:
             ingest_path(conn, args.corpus)
         cases = load_benchmark_cases(args.dataset)
+        if args.case_offset:
+            cases = cases[max(args.case_offset, 0) :]
+        if args.case_limit is not None:
+            cases = cases[: max(args.case_limit, 0)]
         modes = [item.strip() for item in args.modes.split(",") if item.strip()]
         result = run_benchmark(
             conn, cases, modes=modes, top_k=args.top_k,

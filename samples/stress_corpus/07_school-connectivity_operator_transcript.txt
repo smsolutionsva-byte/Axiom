@@ -1,0 +1,5 @@
+Operator transcript AXM-07-03
+
+00:03 Operator: VIDYA-61 is active in Kohima.
+00:12 Analyst: Confirm whether router packet loss connects to hilltop antenna fade.
+00:27 Operator: Yes, the offline lesson sync record says to ship backup modem after sync success reached 83 percent.

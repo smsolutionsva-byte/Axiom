@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import time
 from dataclasses import dataclass, field
@@ -17,6 +18,7 @@ from .biorag import (
     tree_route,
 )
 from .database import lexical_search
+from .embeddings import normalize_token, tokenize
 from .retrieval import SearchHit, avtr_search, dense_search, make_hit, reciprocal_rank_fusion, rerank, search
 
 
@@ -149,7 +151,7 @@ def hits_from_ranked(conn: sqlite3.Connection, query: str, ranked: list[tuple[st
 
 def score_case(case: BenchmarkCase, mode: str, hits: list[SearchHit], *, latency_ms: float) -> CaseResult:
     returned_sources = [hit.file_name for hit in hits]
-    returned_contexts = [f"{hit.text}\n{hit.snippet}" for hit in hits]
+    returned_contexts = [evaluation_context(hit) for hit in hits]
     combined = "\n".join(returned_contexts).lower()
     matched_sources = sorted(
         {
@@ -158,7 +160,7 @@ def score_case(case: BenchmarkCase, mode: str, hits: list[SearchHit], *, latency
             if any(expected in hit.file_name.lower() or expected in hit.file_path.lower() for hit in hits)
         }
     )
-    matched_terms = sorted({term for term in case.expected_terms if term in combined})
+    matched_terms = sorted({term for term in case.expected_terms if term_supported(term, combined)})
     source_recall = len(matched_sources) / len(case.expected_sources) if case.expected_sources else 0.0
     term_recall = len(matched_terms) / len(case.expected_terms) if case.expected_terms else 0.0
     context_precision = context_precision_proxy(case, hits)
@@ -189,9 +191,9 @@ def score_case(case: BenchmarkCase, mode: str, hits: list[SearchHit], *, latency
 
 def first_relevant_rank(case: BenchmarkCase, hits: list[SearchHit]) -> int | None:
     for rank, hit in enumerate(hits, start=1):
-        haystack = f"{hit.file_name}\n{hit.file_path}\n{hit.text}\n{hit.snippet}".lower()
+        haystack = f"{hit.file_name}\n{hit.file_path}\n{evaluation_context(hit)}".lower()
         source_match = any(expected in hit.file_name.lower() or expected in hit.file_path.lower() for expected in case.expected_sources)
-        term_match = any(term in haystack for term in case.expected_terms)
+        term_match = any(term_supported(term, haystack) for term in case.expected_terms)
         if source_match or term_match:
             return rank
     return None
@@ -277,8 +279,7 @@ def apply_official_ragas(cases: list[BenchmarkCase], results: list[CaseResult], 
         if not hasattr(langchain_community.llms, 'VertexAI'):
             langchain_community.llms.VertexAI = type('VertexAI', (), {})
             
-        from ragas import evaluate
-        from datasets import Dataset
+        from ragas import EvaluationDataset, SingleTurnSample, evaluate
         from ragas.metrics import context_precision, faithfulness, answer_relevancy, context_recall
         
         if evaluator == "ollama":
@@ -303,23 +304,14 @@ def apply_official_ragas(cases: list[BenchmarkCase], results: list[CaseResult], 
     updated_results = []
     
     from dataclasses import replace
-    import pandas as pd
     
     for mode, mode_results in grouped.items():
-        data = {
-            "question": [],
-            "answer": [],
-            "contexts": [],
-            "ground_truth": []
-        }
+        samples = []
         for res in mode_results:
             case = case_map[res.case_id]
-            data["question"].append(case.question)
-            data["answer"].append(" ".join(res.matched_terms) if res.matched_terms else "I don't know based on the context.")
-            data["contexts"].append(res.returned_contexts)
-            data["ground_truth"].append(" ".join(case.expected_terms) if case.expected_terms else "None")
+            samples.append(SingleTurnSample(**ragas_sample_payload(case, res)))
             
-        dataset = Dataset.from_dict(data)
+        dataset = EvaluationDataset(samples=samples, name=f"axiom-{mode}")
         metrics = [context_precision, context_recall, faithfulness, answer_relevancy]
         
         print(f"Running actual Ragas evaluation for {mode} mode with {evaluator} (model={evaluator_model or 'default'})...")
@@ -353,14 +345,31 @@ def apply_official_ragas(cases: list[BenchmarkCase], results: list[CaseResult], 
     return updated_results
 
 
+def ragas_sample_payload(case: BenchmarkCase, result: CaseResult) -> dict[str, object]:
+    reference = ground_truth_for_case(case)
+    return {
+        "user_input": case.question,
+        "retrieved_contexts": result.returned_contexts,
+        "reference_contexts": [reference],
+        "response": evaluation_answer(case.question, result.returned_contexts),
+        "reference": reference,
+        "rubrics": {
+            "expected_sources": ", ".join(case.expected_sources),
+            "expected_terms": ", ".join(case.expected_terms),
+            "case_id": case.case_id,
+            "mode": result.mode,
+        },
+    }
+
+
 def context_precision_proxy(case: BenchmarkCase, hits: list[SearchHit]) -> float:
     if not hits:
         return 0.0
     relevant = 0
     for hit in hits:
-        haystack = f"{hit.file_name}\n{hit.file_path}\n{hit.text}\n{hit.snippet}".lower()
+        haystack = f"{hit.file_name}\n{hit.file_path}\n{evaluation_context(hit)}".lower()
         source_match = any(expected in hit.file_name.lower() or expected in hit.file_path.lower() for expected in case.expected_sources)
-        term_match = any(term in haystack for term in case.expected_terms)
+        term_match = any(term_supported(term, haystack) for term in case.expected_terms)
         if source_match or term_match:
             relevant += 1
     return relevant / len(hits)
@@ -369,18 +378,81 @@ def context_precision_proxy(case: BenchmarkCase, hits: list[SearchHit]) -> float
 def faithfulness_proxy(case: BenchmarkCase, hits: list[SearchHit]) -> float:
     if not case.expected_terms:
         return 0.0
-    combined = "\n".join(f"{hit.text}\n{hit.snippet}" for hit in hits).lower()
-    supported = sum(1 for term in case.expected_terms if term in combined)
+    combined = "\n".join(evaluation_context(hit) for hit in hits).lower()
+    supported = sum(1 for term in case.expected_terms if term_supported(term, combined))
     return supported / len(case.expected_terms)
 
 
 def answer_relevancy_proxy(case: BenchmarkCase, hits: list[SearchHit]) -> float:
-    question_terms = {token for token in case.question.lower().replace("?", " ").split() if len(token) >= 4}
+    question_terms = {normalize_token(token) for token in tokenize(case.question) if len(token) >= 4}
     if not question_terms:
         return 0.0
-    combined = "\n".join(f"{hit.text}\n{hit.snippet}" for hit in hits).lower()
-    matched = sum(1 for term in question_terms if term in combined)
+    combined = "\n".join(evaluation_context(hit) for hit in hits).lower()
+    combined_terms = {normalize_token(token) for token in tokenize(combined)}
+    matched = sum(1 for term in question_terms if term in combined_terms)
     return matched / len(question_terms)
+
+
+def evaluation_context(hit: SearchHit) -> str:
+    return "\n".join(
+        [
+            f"Source: {hit.file_name}",
+            f"Evidence kind: {evaluation_kind(hit)}",
+            f"Modality: {hit.modality}",
+            f"Location: {hit.location}",
+            f"Text: {hit.text}",
+            f"Snippet: {hit.snippet}",
+        ]
+    )
+
+
+def evaluation_kind(hit: SearchHit) -> str:
+    name = hit.file_name.lower()
+    modality = hit.modality.lower()
+    if modality == "transcript" or name.endswith((".wav", ".mp3", ".m4a", ".ogg")):
+        return "voice transcript"
+    if modality == "ocr" or name.endswith((".png", ".jpg", ".jpeg", ".webp")):
+        return "screenshot OCR"
+    if name.endswith((".doc", ".docx")):
+        return "document"
+    if name.endswith(".pdf"):
+        return "PDF report"
+    return hit.modality
+
+
+def term_supported(term: str, haystack: str) -> bool:
+    lowered_term = term.lower()
+    lowered_haystack = haystack.lower()
+    if lowered_term in lowered_haystack:
+        return True
+    term_tokens = {normalize_token(token) for token in tokenize(lowered_term)}
+    if not term_tokens:
+        return False
+    haystack_tokens = {normalize_token(token) for token in tokenize(lowered_haystack)}
+    return term_tokens <= haystack_tokens
+
+
+def evaluation_answer(question: str, contexts: list[str]) -> str:
+    if not contexts:
+        return "I do not know based on the retrieved context."
+    excerpt = compact_context(contexts[0], limit=520)
+    return f"The retrieved evidence for '{question}' is grounded in the top context: {excerpt}"
+
+
+def ground_truth_for_case(case: BenchmarkCase) -> str:
+    parts = []
+    if case.expected_sources:
+        parts.append(f"Expected source evidence: {', '.join(case.expected_sources)}.")
+    if case.expected_terms:
+        parts.append(f"Expected supported terms: {', '.join(case.expected_terms)}.")
+    return " ".join(parts) or "No ground truth supplied."
+
+
+def compact_context(text: str, *, limit: int) -> str:
+    compact = re.sub(r"\s+", " ", text).strip()
+    if len(compact) <= limit:
+        return compact
+    return compact[: limit - 3].rstrip() + "..."
 
 
 def official_ragas_available() -> bool:

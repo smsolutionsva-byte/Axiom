@@ -8,7 +8,8 @@ import urllib.request
 from dataclasses import asdict, dataclass
 
 from .biorag import biorag_search
-from .citation import citation_token, validate_citations
+from .citation import citation_token, extract_citations, validate_citations
+from .embeddings import lexical_overlap, tokenize
 from .retrieval import SearchHit, avtr_search, search
 
 
@@ -46,7 +47,7 @@ def answer_query(conn: sqlite3.Connection, query: str, *, top_k: int = 5) -> Que
 
     model_answer = try_ollama_answer(query, hits)
     validated = validate_citations(model_answer, allowed) if model_answer else ""
-    if not validated or "[Unverified Claim]" in validated:
+    if not validated or "[Unverified Claim]" in validated or not cited_claims_are_grounded(validated, hits):
         validated = validate_citations(extractive_answer(query, hits), allowed)
     return QueryResult(
         query_id=query_id,
@@ -59,28 +60,22 @@ def extractive_answer(query: str, hits: list[SearchHit]) -> str:
     primary = hits[0]
     lines = [
         (
-            f"Assessment: Axiom found local evidence for '{query}' with the strongest match in "
+            f"Answer: Axiom found cited local evidence for '{query}'. The strongest match is "
             f"{primary.file_name} at {primary.location}. {citation_token(primary.chunk_id)}"
         )
     ]
     for index, hit in enumerate(hits, start=1):
         snippet = clean_excerpt(hit.snippet)
         lines.append(
-            f"Evidence {index}: {hit.file_name} ({hit.modality}, {hit.location}) contains this relevant passage: "
+            f"Evidence {index}: {hit.file_name} ({evidence_kind_label(hit)}, {hit.location}) says: "
             f"\"{snippet}\" {citation_token(hit.chunk_id)}"
         )
     if len(hits) >= 2:
         pair = hits[:2]
         lines.append(
-            f"Correlation: The top sources should be reviewed together because they both matched the same query intent "
-            f"across separate local records: {pair[0].file_name} and {pair[1].file_name}. "
+            f"Cross-check: review {pair[0].file_name} with {pair[1].file_name} because HiveRAG retrieved both for the same question. "
             f"{citation_token(pair[0].chunk_id)} {citation_token(pair[1].chunk_id)}"
         )
-    lines.append(
-        f"Operator action: use `python -m axiom sources inspect {primary.chunk_id}` to inspect the strongest cited chunk, "
-        f"or `python -m axiom operator open \"{primary.file_path}\" --execute` to open the source locally. "
-        f"{citation_token(primary.chunk_id)}"
-    )
     return "\n".join(lines)
 
 
@@ -97,19 +92,15 @@ def try_ollama_answer(query: str, hits: list[SearchHit]) -> str | None:
         return None
 
     context_blocks = "\n\n".join(
-        (
-            f"Context {index}\n"
-            f"Citation: {citation_token(hit.chunk_id)}\n"
-            f"Source: {hit.file_name}\n"
-            f"Location: {hit.location}\n"
-            f"Text: {hit.text}"
-        )
+        evidence_context_block(hit, index=index)
         for index, hit in enumerate(hits, start=1)
     )
     prompt = f"""You are an offline secure evidence assistant.
 Use only the context blocks below.
 Every factual sentence must include one of the provided citation tokens exactly.
-If the evidence is insufficient, say so with a citation to the closest context.
+Keep the answer concise and copy important wording from the evidence.
+Do not use one citation to support a claim that appears only in another context.
+If the evidence is insufficient, say what is missing and cite the closest context.
 
 {context_blocks}
 
@@ -135,6 +126,91 @@ User query: {query}
         if answer:
             return answer
     return None
+
+
+def evidence_context_block(hit: SearchHit, *, index: int) -> str:
+    return "\n".join(
+        [
+            f"Context {index}",
+            f"Citation: {citation_token(hit.chunk_id)}",
+            f"Source: {hit.file_name}",
+            f"Evidence kind: {evidence_kind_label(hit)}",
+            f"Location: {hit.location}",
+            f"Text: {hit.text}",
+        ]
+    )
+
+
+def evidence_kind_label(hit: SearchHit) -> str:
+    name = hit.file_name.lower()
+    modality = hit.modality.lower()
+    if modality == "transcript" or name.endswith((".wav", ".mp3", ".m4a", ".ogg")):
+        return "voice transcript"
+    if modality == "ocr" or name.endswith((".png", ".jpg", ".jpeg", ".webp")):
+        return "screenshot OCR"
+    if name.endswith((".doc", ".docx")):
+        return "document"
+    if name.endswith(".pdf"):
+        return "PDF report"
+    return hit.modality
+
+
+def cited_claims_are_grounded(answer: str, hits: list[SearchHit]) -> bool:
+    if not answer.strip():
+        return False
+    contexts = {
+        hit.chunk_id: f"{hit.file_name} {hit.modality} {evidence_kind_label(hit)} {hit.location} {hit.text} {hit.snippet}"
+        for hit in hits
+    }
+    checked = 0
+    for line in answer.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        citations = extract_citations(stripped)
+        if not citations:
+            return False
+        claim = remove_citations(stripped)
+        claim_tokens = [
+            token
+            for token in tokenize(claim)
+            if len(token) >= 4 and token not in CLAIM_STOP_TERMS
+        ]
+        if not claim_tokens:
+            continue
+        support = " ".join(contexts.get(chunk_id, "") for chunk_id in citations)
+        if lexical_overlap(claim_tokens, support) < 0.34:
+            return False
+        checked += 1
+    return checked > 0
+
+
+def remove_citations(text: str) -> str:
+    for citation in extract_citations(text):
+        text = text.replace(citation_token(citation), "")
+    return text
+
+
+CLAIM_STOP_TERMS = {
+    "answer",
+    "axiom",
+    "because",
+    "cited",
+    "claim",
+    "context",
+    "evidence",
+    "found",
+    "local",
+    "match",
+    "matching",
+    "question",
+    "retrieved",
+    "review",
+    "source",
+    "strongest",
+    "this",
+    "with",
+}
 
 
 def evidence_answer_models() -> list[str]:

@@ -1,0 +1,3 @@
+Annex report AXM-09-05
+
+The formal annex for SAGAR-44 says container scan triage depends on cross-checking briefing notes, dashboard OCR, and transcript evidence. It recommends reviewing manifest mismatch beside scan backlog and treating seal tamper pattern as the final approval gate.

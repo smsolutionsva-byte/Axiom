@@ -1,0 +1,3 @@
+Audit log AXM-06-06
+
+Audit trail for TRACK-18: source desk Rail Diagnostics; place Itarsi; date 2026-04-27; tracked value sensor drift equals 2.4 millimeters. The resolved operator action is 'calibrate platform reader', and the unresolved risk remains 'false hotbox alert'.

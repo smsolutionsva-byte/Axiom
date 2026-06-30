@@ -1,0 +1,5 @@
+Operator transcript AXM-06-03
+
+00:03 Operator: TRACK-18 is active in Itarsi.
+00:12 Analyst: Confirm whether bearing heat connects to false hotbox alert.
+00:27 Operator: Yes, the axle sensor audit record says to calibrate platform reader after sensor drift reached 2.4 millimeters.

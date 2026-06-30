@@ -1,0 +1,5 @@
+Operator transcript AXM-12-03
+
+00:03 Operator: BHANDAR-39 is active in Nagpur.
+00:12 Analyst: Confirm whether humidity spike connects to forklift route conflict.
+00:27 Operator: Yes, the grain lot verification record says to seal bay four after lot variance reached 19 sacks.

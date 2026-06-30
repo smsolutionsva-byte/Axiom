@@ -1,0 +1,5 @@
+Operator transcript AXM-02-03
+
+00:03 Operator: AAROGYA-27 is active in Dharwad.
+00:12 Analyst: Confirm whether thermal breach connects to generator battery sag.
+00:27 Operator: Yes, the cold-chain vaccine route record says to dispatch ice packs after storage temperature reached 8.7 celsius.

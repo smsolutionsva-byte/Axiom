@@ -1,0 +1,5 @@
+Operator transcript AXM-05-03
+
+00:03 Operator: URJA-52 is active in Jaisalmer.
+00:12 Analyst: Confirm whether inverter alarm connects to dust cover buildup.
+00:27 Operator: Yes, the battery balancing record says to schedule panel cleaning after state of charge reached 47 percent.

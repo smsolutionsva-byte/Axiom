@@ -1,0 +1,3 @@
+Annex report AXM-12-05
+
+The formal annex for BHANDAR-39 says grain lot verification depends on cross-checking briefing notes, dashboard OCR, and transcript evidence. It recommends reviewing humidity spike beside lot variance and treating forklift route conflict as the final approval gate.

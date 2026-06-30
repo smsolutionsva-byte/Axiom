@@ -1,0 +1,3 @@
+Audit log AXM-12-06
+
+Audit trail for BHANDAR-39: source desk Supply Integrity Team; place Nagpur; date 2026-05-16; tracked value lot variance equals 19 sacks. The resolved operator action is 'seal bay four', and the unresolved risk remains 'forklift route conflict'.

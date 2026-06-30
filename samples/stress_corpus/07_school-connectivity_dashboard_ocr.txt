@@ -1,0 +1,3 @@
+Dashboard OCR AXM-07-04
+
+Visible panel: 'VIDYA-61 / Kohima'. Alert card: 'router packet loss'. Metric tile: 'sync success: 83 percent'. Action banner: 'ship backup modem'. The screenshot OCR also shows the risk label 'hilltop antenna fade'.

@@ -1,0 +1,5 @@
+Operator transcript AXM-10-03
+
+00:03 Operator: JAL-23 is active in Indore.
+00:12 Analyst: Confirm whether pressure dip connects to valve telemetry gap.
+00:27 Operator: Yes, the chlorine pump audit record says to inspect ward seven line after residual chlorine reached 0.42 ppm.

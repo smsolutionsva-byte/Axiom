@@ -1,0 +1,3 @@
+Field note AXM-02-02
+
+The District Health Desk visit in Dharwad confirms AAROGYA-27 needs local follow-up. The note ties cold-chain vaccine route to the field observation 'thermal breach' and says the measured storage temperature stayed near 8.7 celsius. The field team named generator battery sag as the operational blocker.

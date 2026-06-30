@@ -1,0 +1,5 @@
+Operator transcript AXM-01-03
+
+00:03 Operator: KAVERI-14 is active in Nashik.
+00:12 Analyst: Confirm whether canal reserve connects to pump relay overload.
+00:27 Operator: Yes, the drip irrigation record says to move spare valves before rainfall after soil moisture reached 31 percent.

@@ -1,0 +1,3 @@
+Audit log AXM-05-06
+
+Audit trail for URJA-52: source desk Microgrid Control; place Jaisalmer; date 2026-04-24; tracked value state of charge equals 47 percent. The resolved operator action is 'schedule panel cleaning', and the unresolved risk remains 'dust cover buildup'.

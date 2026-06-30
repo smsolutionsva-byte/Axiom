@@ -1,0 +1,3 @@
+Field note AXM-07-02
+
+The Education Network Cell visit in Kohima confirms VIDYA-61 needs local follow-up. The note ties offline lesson sync to the field observation 'router packet loss' and says the measured sync success stayed near 83 percent. The field team named hilltop antenna fade as the operational blocker.

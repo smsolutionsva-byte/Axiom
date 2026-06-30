@@ -1,0 +1,3 @@
+Field note AXM-06-02
+
+The Rail Diagnostics visit in Itarsi confirms TRACK-18 needs local follow-up. The note ties axle sensor audit to the field observation 'bearing heat' and says the measured sensor drift stayed near 2.4 millimeters. The field team named false hotbox alert as the operational blocker.

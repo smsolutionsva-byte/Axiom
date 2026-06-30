@@ -1,0 +1,3 @@
+Dashboard OCR AXM-02-04
+
+Visible panel: 'AAROGYA-27 / Dharwad'. Alert card: 'thermal breach'. Metric tile: 'storage temperature: 8.7 celsius'. Action banner: 'dispatch ice packs'. The screenshot OCR also shows the risk label 'generator battery sag'.

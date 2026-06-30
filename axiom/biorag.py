@@ -17,18 +17,19 @@ from .database import (
     utc_now,
     vector_from_row,
 )
-from .embeddings import cosine, dump_vector, embed_text, lexical_overlap, load_vector, tokenize
+from .embeddings import cosine, dump_vector, embed_text, lexical_overlap, load_vector, normalize_token, tokenize
 from .retrieval import (
     SearchHit,
     coverage_select,
     dense_search,
+    evidence_search_text,
     make_hit,
     reciprocal_rank_fusion,
     rerank,
 )
 
 
-BIORAG_INDEX_VERSION = "biorag-v2"
+BIORAG_INDEX_VERSION = "biorag-v3"
 HEX_CELL_RADIUS = 0.24
 HEX_DIRECTIONS = ((1, 0), (1, -1), (0, -1), (-1, 0), (-1, 1), (0, 1))
 WEB_DAMPING = 0.64
@@ -144,7 +145,16 @@ def biorag_search(conn: sqlite3.Connection, query: str, *, top_k: int = 5) -> tu
     )
     boosted = apply_adaptive_growth(conn, query, fused, paths)
     reranked = rerank(conn, query, boosted[: budget.max_candidates])
-    selected = coverage_select(conn, query, reranked, top_k=top_k)
+    covered_candidates, rescued_ids = coverage_rescue(conn, query, reranked, max_candidates=budget.max_candidates)
+    for chunk_id in rescued_ids:
+        paths[chunk_id].add("coverage_rescue")
+    selected = coverage_select(
+        conn,
+        query,
+        covered_candidates,
+        top_k=top_k,
+        min_relevance=min_relevance_for_query(query),
+    )
 
     if not selected:
         selected = rerank(conn, query, seed_fused[: max(top_k * 4, 20)])[:top_k]
@@ -238,6 +248,13 @@ def energy_budget(query: str, *, top_k: int) -> EnergyBudget:
         max_subqueries=1 if mode == "cheap" else 2,
         mode=mode,
     )
+
+
+def min_relevance_for_query(query: str) -> float:
+    lowered = query.lower()
+    if any(phrase in lowered for phrase in ("which document", "what document", "which source", "what source")):
+        return 0.34
+    return 0.0
 
 
 def build_tree_index(conn: sqlite3.Connection) -> None:
@@ -886,6 +903,58 @@ def apply_adaptive_growth(
     return sorted(boosted, key=lambda item: item[1], reverse=True)
 
 
+def coverage_rescue(
+    conn: sqlite3.Connection,
+    query: str,
+    candidates: list[tuple[str, float]],
+    *,
+    max_candidates: int,
+) -> tuple[list[tuple[str, float]], set[str]]:
+    query_terms = critical_query_terms(query)
+    if not query_terms:
+        return candidates[:max_candidates], set()
+
+    candidate_scores = dict(candidates[:max_candidates])
+    covered = covered_query_terms(conn, query_terms, candidates[: min(len(candidates), 12)])
+    missing = query_terms - covered
+    if not missing and len(covered) / max(len(query_terms), 1) >= 0.75:
+        return candidates[:max_candidates], set()
+
+    rescued: set[str] = set()
+    for row in iter_child_vectors(conn):
+        chunk = get_chunk(conn, row["chunk_id"])
+        if chunk is None:
+            continue
+        search_text = evidence_search_text(chunk)
+        text_terms = critical_query_terms(search_text)
+        missing_coverage = len(missing & text_terms) / max(len(missing), 1)
+        query_coverage = len(query_terms & text_terms) / max(len(query_terms), 1)
+        lexical_score = lexical_overlap(query_terms, search_text)
+        if missing_coverage <= 0 and query_coverage < 0.38 and lexical_score < 0.22:
+            continue
+        rescue_score = 0.038 + missing_coverage * 0.18 + query_coverage * 0.075 + lexical_score * 0.06
+        old_score = candidate_scores.get(row["chunk_id"], 0.0)
+        candidate_scores[row["chunk_id"]] = max(old_score, old_score + rescue_score if old_score else rescue_score)
+        rescued.add(row["chunk_id"])
+
+    ranked = sorted(candidate_scores.items(), key=lambda item: item[1], reverse=True)
+    return ranked[:max_candidates], rescued
+
+
+def covered_query_terms(
+    conn: sqlite3.Connection,
+    query_terms: set[str],
+    candidates: list[tuple[str, float]],
+) -> set[str]:
+    covered: set[str] = set()
+    for chunk_id, _score in candidates:
+        chunk = get_chunk(conn, chunk_id)
+        if chunk is None:
+            continue
+        covered.update(query_terms & critical_query_terms(evidence_search_text(chunk)))
+    return covered
+
+
 def update_adaptive_paths(
     conn: sqlite3.Connection,
     query: str,
@@ -1081,6 +1150,32 @@ def key_terms(text: str, *, limit: int = 24) -> list[str]:
     )
     return [token for token, _count in counts.most_common(limit)]
 
+
+def critical_query_terms(text: str) -> set[str]:
+    return {
+        normalize_token(token)
+        for token in tokenize(text)
+        if len(token) >= 4 and token not in STOP_TERMS and token not in QUERY_STOP_TERMS
+    }
+
+
+QUERY_STOP_TERMS = {
+    "answer",
+    "based",
+    "confirm",
+    "discuss",
+    "discusses",
+    "evidence",
+    "find",
+    "found",
+    "mentions",
+    "question",
+    "source",
+    "sources",
+    "support",
+    "supports",
+    "which",
+}
 
 def query_signature(query: str) -> str:
     terms = key_terms(query, limit=8)

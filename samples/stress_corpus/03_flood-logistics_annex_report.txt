@@ -1,0 +1,3 @@
+Annex report AXM-03-05
+
+The formal annex for BRAHMAPUTRA-09 says boat fuel staging depends on cross-checking briefing notes, dashboard OCR, and transcript evidence. It recommends reviewing jetty queue beside diesel reserve and treating bridge approach washout as the final approval gate.

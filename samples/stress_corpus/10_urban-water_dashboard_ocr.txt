@@ -1,0 +1,3 @@
+Dashboard OCR AXM-10-04
+
+Visible panel: 'JAL-23 / Indore'. Alert card: 'pressure dip'. Metric tile: 'residual chlorine: 0.42 ppm'. Action banner: 'inspect ward seven line'. The screenshot OCR also shows the risk label 'valve telemetry gap'.

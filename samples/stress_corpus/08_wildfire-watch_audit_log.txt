@@ -1,0 +1,3 @@
+Audit log AXM-08-06
+
+Audit trail for AGNI-07: source desk Forest Response Desk; place Bandipur; date 2026-05-04; tracked value thermal anomaly equals 64 hectares. The resolved operator action is 'pre-position water tenders', and the unresolved risk remains 'wind reversal'.

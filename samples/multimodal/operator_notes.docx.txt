@@ -1,3 +1,3 @@
 DOCX Operator Notes.
 
-The operator note describes an offline workflow: ingest DOC, PDF, image OCR, and voice transcript evidence; build a unified semantic retrieval index; answer only with citations from the local evidence ledger; and export an auditable report.
+The operator note describes a multimodal offline workflow: ingest DOC, PDF, image OCR, and voice transcript evidence; build a unified semantic retrieval index; answer only with citations from the local evidence ledger; and export an auditable report.

@@ -1,0 +1,3 @@
+Annex report AXM-06-05
+
+The formal annex for TRACK-18 says axle sensor audit depends on cross-checking briefing notes, dashboard OCR, and transcript evidence. It recommends reviewing bearing heat beside sensor drift and treating false hotbox alert as the final approval gate.

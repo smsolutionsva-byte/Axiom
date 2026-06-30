@@ -1,0 +1,3 @@
+Field note AXM-04-02
+
+The Security Education Team visit in Pune confirms SURAKSHA-33 needs local follow-up. The note ties phishing drill to the field observation 'credential replay' and says the measured click rate stayed near 11 percent. The field team named shared password reuse as the operational blocker.

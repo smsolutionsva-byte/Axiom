@@ -1,0 +1,3 @@
+Dashboard OCR AXM-11-04
+
+Visible panel: 'NIRAMAY-88 / Kozhikode'. Alert card: 'mosquito density'. Metric tile: 'rapid test positivity: 6.8 percent'. Action banner: 'expand fogging ring'. The screenshot OCR also shows the risk label 'standing water pocket'.

@@ -1,0 +1,3 @@
+Annex report AXM-08-05
+
+The formal annex for AGNI-07 says lookout camera grid depends on cross-checking briefing notes, dashboard OCR, and transcript evidence. It recommends reviewing smoke plume beside thermal anomaly and treating wind reversal as the final approval gate.

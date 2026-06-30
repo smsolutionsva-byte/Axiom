@@ -1,0 +1,3 @@
+Annex report AXM-05-05
+
+The formal annex for URJA-52 says battery balancing depends on cross-checking briefing notes, dashboard OCR, and transcript evidence. It recommends reviewing inverter alarm beside state of charge and treating dust cover buildup as the final approval gate.

@@ -1,0 +1,3 @@
+Annex report AXM-07-05
+
+The formal annex for VIDYA-61 says offline lesson sync depends on cross-checking briefing notes, dashboard OCR, and transcript evidence. It recommends reviewing router packet loss beside sync success and treating hilltop antenna fade as the final approval gate.

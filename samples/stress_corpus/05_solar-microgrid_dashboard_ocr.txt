@@ -1,0 +1,3 @@
+Dashboard OCR AXM-05-04
+
+Visible panel: 'URJA-52 / Jaisalmer'. Alert card: 'inverter alarm'. Metric tile: 'state of charge: 47 percent'. Action banner: 'schedule panel cleaning'. The screenshot OCR also shows the risk label 'dust cover buildup'.

@@ -1,0 +1,3 @@
+Annex report AXM-10-05
+
+The formal annex for JAL-23 says chlorine pump audit depends on cross-checking briefing notes, dashboard OCR, and transcript evidence. It recommends reviewing pressure dip beside residual chlorine and treating valve telemetry gap as the final approval gate.

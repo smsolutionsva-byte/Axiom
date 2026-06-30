@@ -1,0 +1,3 @@
+Dashboard OCR AXM-08-04
+
+Visible panel: 'AGNI-07 / Bandipur'. Alert card: 'smoke plume'. Metric tile: 'thermal anomaly: 64 hectares'. Action banner: 'pre-position water tenders'. The screenshot OCR also shows the risk label 'wind reversal'.

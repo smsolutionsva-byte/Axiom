@@ -1,0 +1,3 @@
+Annex report AXM-04-05
+
+The formal annex for SURAKSHA-33 says phishing drill depends on cross-checking briefing notes, dashboard OCR, and transcript evidence. It recommends reviewing credential replay beside click rate and treating shared password reuse as the final approval gate.

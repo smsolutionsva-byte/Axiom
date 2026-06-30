@@ -5,6 +5,7 @@ import tempfile
 import unittest
 import base64
 import os
+import json
 from pathlib import Path
 
 from axiom.answering import answer_query
@@ -13,7 +14,7 @@ from axiom.biorag import biorag_search, biorag_status, energy_budget
 from axiom.citation import validate_citations
 from axiom.database import connect
 from axiom.dependencies import audit_dependencies, dependency_by_key
-from axiom.evaluation import BenchmarkCase, run_benchmark
+from axiom.evaluation import BenchmarkCase, run_benchmark, term_supported
 from axiom.extractors import extract_docx_xml, extract_segments, file_type_for
 from axiom.image_generation import ImageGenerationRequest, generate_image, image_generation_status
 from axiom.ingestion import ingest_path
@@ -24,6 +25,7 @@ from axiom.retrieval import avtr_search
 from axiom.uploads import save_uploaded_files
 from axiom.vision import analyze_image, ingest_visual_analysis, run_ocr, save_pasted_image
 from axiom.workstation import find_files, plan_operator_task, run_command, scan_folder
+from tools.build_large_benchmark import build_dataset
 
 
 class AxiomCoreTests(unittest.TestCase):
@@ -176,6 +178,36 @@ class AxiomCoreTests(unittest.TestCase):
                 self.assertGreaterEqual(report["summary"]["biorag"]["hit_at_k"], 1.0)
             finally:
                 conn.close()
+
+    def test_benchmark_term_support_handles_wording_variants(self) -> None:
+        haystack = "The voice recording transcript says the screenshot was reviewed in the final report."
+
+        self.assertTrue(term_supported("voice recordings", haystack))
+        self.assertTrue(term_supported("screenshot review", haystack))
+        self.assertTrue(term_supported("field report", "Field dashboard evidence appears in the final report."))
+
+    def test_large_benchmark_builder_exports_axiom_and_ragas_shapes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            summary = build_dataset(
+                corpus_dir=root / "corpus",
+                axiom_path=root / "stress_eval.jsonl",
+                ragas_path=root / "stress_ragas.jsonl",
+                topics=2,
+                files_per_topic=4,
+                clean=True,
+            )
+
+            self.assertEqual(summary["files"], 8)
+            self.assertGreaterEqual(summary["cases"], 10)
+            self.assertEqual(len(list((root / "corpus").glob("*.txt"))), 8)
+            cases = (root / "stress_eval.jsonl").read_text(encoding="utf-8").splitlines()
+            ragas_rows = (root / "stress_ragas.jsonl").read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(cases), summary["cases"])
+            self.assertEqual(len(ragas_rows), summary["ragas_samples"])
+            first_ragas = json.loads(ragas_rows[0])
+            self.assertIn("user_input", first_ragas)
+            self.assertIn("reference_contexts", first_ragas)
 
     def test_analytics_builds_graph_timeline_and_prediction(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -1,0 +1,3 @@
+Field note AXM-05-02
+
+The Microgrid Control visit in Jaisalmer confirms URJA-52 needs local follow-up. The note ties battery balancing to the field observation 'inverter alarm' and says the measured state of charge stayed near 47 percent. The field team named dust cover buildup as the operational blocker.

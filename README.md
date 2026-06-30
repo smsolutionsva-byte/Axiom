@@ -182,6 +182,37 @@ Axiom now has an operator layer:
 
 This keeps the demo impressive while still defensible in a security environment: power exists, but it is visible and auditable.
 
+## Large HiveRAG Benchmark
+
+The default smoke benchmark is intentionally tiny. For a tougher local run, generate the deterministic stress corpus:
+
+```powershell
+python tools\build_large_benchmark.py
+```
+
+This creates:
+
+- `samples\stress_corpus\` with 72 local evidence files.
+- `benchmarks\hiverag_stress_eval.jsonl` with 96 Axiom benchmark cases.
+- `benchmarks\hiverag_stress_ragas.jsonl` in a Ragas `SingleTurnSample` / `EvaluationDataset`-compatible shape.
+
+Run the larger benchmark:
+
+```powershell
+python -m axiom benchmark --db data\hiverag_stress.sqlite --corpus samples\stress_corpus --dataset benchmarks\hiverag_stress_eval.jsonl --modes vector,hybrid,tree,graph,avtr,hiverag --top-k 5 --out exports\benchmarks --label hiverag_stress
+```
+
+Load the Ragas dataset directly:
+
+```python
+from ragas import EvaluationDataset
+
+dataset = EvaluationDataset.from_jsonl("benchmarks/hiverag_stress_ragas.jsonl")
+```
+
+For official LLM-judge scoring, use the same benchmark command with `--evaluator ollama --evaluator-model qwen2.5:7b` after the eval dependencies and local model are ready. Official evaluator runs can be slow on CPU-local models.
+Use `--case-limit 12` or `--case-offset 12 --case-limit 12` to test the larger dataset in slices.
+
 ## Project Layout
 
 ```text

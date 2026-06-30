@@ -1,0 +1,3 @@
+Solar Microgrid briefing AXM-05-01
+
+Program URJA-52 in Jaisalmer tracks the battery balancing plan on 2026-04-24. The briefing records inverter alarm as the primary coarse memory cue and lists state of charge at 47 percent. Analysts must watch for dust cover buildup and should schedule panel cleaning. Partner desk: Microgrid Control.

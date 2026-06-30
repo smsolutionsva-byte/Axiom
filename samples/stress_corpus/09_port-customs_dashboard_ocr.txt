@@ -1,0 +1,3 @@
+Dashboard OCR AXM-09-04
+
+Visible panel: 'SAGAR-44 / Kandla'. Alert card: 'manifest mismatch'. Metric tile: 'scan backlog: 116 containers'. Action banner: 'open lane three'. The screenshot OCR also shows the risk label 'seal tamper pattern'.

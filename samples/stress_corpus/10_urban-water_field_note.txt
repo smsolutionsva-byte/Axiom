@@ -1,0 +1,3 @@
+Field note AXM-10-02
+
+The Water Quality Cell visit in Indore confirms JAL-23 needs local follow-up. The note ties chlorine pump audit to the field observation 'pressure dip' and says the measured residual chlorine stayed near 0.42 ppm. The field team named valve telemetry gap as the operational blocker.

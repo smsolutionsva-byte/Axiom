@@ -1,0 +1,3 @@
+Audit log AXM-03-06
+
+Audit trail for BRAHMAPUTRA-09: source desk Relief Ops Room; place Majuli; date 2026-04-18; tracked value diesel reserve equals 420 liters. The resolved operator action is 'reroute via north ferry', and the unresolved risk remains 'bridge approach washout'.

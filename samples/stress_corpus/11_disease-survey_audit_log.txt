@@ -1,0 +1,3 @@
+Audit log AXM-11-06
+
+Audit trail for NIRAMAY-88: source desk Epidemiology Desk; place Kozhikode; date 2026-05-13; tracked value rapid test positivity equals 6.8 percent. The resolved operator action is 'expand fogging ring', and the unresolved risk remains 'standing water pocket'.
