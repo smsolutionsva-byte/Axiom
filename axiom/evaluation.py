@@ -269,6 +269,14 @@ def _avg(values) -> float:
 
 def apply_official_ragas(cases: list[BenchmarkCase], results: list[CaseResult], evaluator: str, evaluator_model: str | None) -> list[CaseResult]:
     try:
+        import sys, types
+        m = types.ModuleType('langchain_community.chat_models.vertexai')
+        m.ChatVertexAI = type('ChatVertexAI', (), {})
+        sys.modules['langchain_community.chat_models.vertexai'] = m
+        import langchain_community.llms
+        if not hasattr(langchain_community.llms, 'VertexAI'):
+            langchain_community.llms.VertexAI = type('VertexAI', (), {})
+            
         from ragas import evaluate
         from datasets import Dataset
         from ragas.metrics import context_precision, faithfulness, answer_relevancy, context_recall
