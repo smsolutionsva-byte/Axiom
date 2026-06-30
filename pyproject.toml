@@ -1,0 +1,28 @@
+[project]
+name = "axiom-offline-intel"
+version = "0.1.0"
+description = "Offline-first multimodal intelligence retrieval starter with strict citations"
+requires-python = ">=3.11"
+authors = [{ name = "Axiom" }]
+dependencies = []
+
+[project.optional-dependencies]
+api = ["fastapi", "uvicorn"]
+pdf = ["pymupdf"]
+docx = ["python-docx"]
+ocr = ["pillow", "pytesseract"]
+vision = ["pillow", "mss", "pytesseract"]
+production-ocr = ["paddleocr"]
+production-retrieval = ["faiss-cpu", "rank-bm25", "sentence-transformers"]
+imagegen = ["diffusers", "transformers", "accelerate", "safetensors", "torch", "Pillow"]
+eval = ["ragas", "datasets", "trulens", "deepeval"]
+
+[tool.setuptools]
+packages = ["axiom"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+axiom = ["web/*.html", "web/*.css", "web/*.js"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

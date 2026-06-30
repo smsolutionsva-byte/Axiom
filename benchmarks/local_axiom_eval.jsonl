@@ -1,0 +1,6 @@
+{"id":"local-001","question":"Which evidence mentions international development targets for 2024 and screenshots?","expected_sources":["annexure_4b.txt"],"expected_terms":["international development","2024","screenshots"]}
+{"id":"local-002","question":"What source discusses a field review comparing a screenshot with Annexure 4B?","expected_sources":["intercept_call_22.txt"],"expected_terms":["field review","screenshot","annexure 4b"]}
+{"id":"local-003","question":"Which multimodal evidence supports SIH25231 field report screenshot review?","expected_sources":["field_annexure.pdf","screen_capture.png"],"expected_terms":["sih25231","screenshot","field report"]}
+{"id":"local-004","question":"Find voice transcript evidence that confirms 2024 screenshot review.","expected_sources":["voice_call.wav"],"expected_terms":["voice transcript","2024","screenshot review"]}
+{"id":"local-005","question":"Which document mentions voice recordings and SIH25231 submission context?","expected_sources":["ntro_case_brief.doc"],"expected_terms":["voice recordings","sih25231","submission"]}
+{"id":"local-006","question":"Find operator notes about multimodal evidence and screenshot OCR.","expected_sources":["operator_notes.docx"],"expected_terms":["multimodal","screenshot ocr","evidence"]}

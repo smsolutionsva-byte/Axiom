@@ -1,0 +1,3 @@
+NTRO SIH25231 legacy DOC brief.
+
+The case brief says the offline RAG system must correlate a document note, a PDF annexure, screenshot OCR, and a voice recording transcript without using cloud services. The analyst asks whether international development references in 2024 are supported by multiple modalities.

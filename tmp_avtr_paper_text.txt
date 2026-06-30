@@ -1,0 +1,903 @@
+--- PAGE 1 ---
+A VTR-HRAG: Agentic Verifiable Tree-Reasoning Hybrid
+Retrieval-Augmented Generation
+A proof-carrying, IRT-calibrated architecture for exhaustive and auditable document intelligence
+Shivansh Mukhia
+30 June 2026
+Abstract
+Retrieval-augmented generation (RAG) systems usually retrieve a small set of top-ranked chunks and ask
+a language model to answer from those chunks. That static pipeline is useful for simple lookup, but it is not
+enough for high-recall document intelligence tasks requiring complete evidence discovery, exact citations,
+table recovery, multi-document comparison, uncertainty reporting, and resistance to unsupported synthesis.
+This paper proposes A VTR-HRAG, an Agentic Verifiable Tree-Reasoning Hybrid Retrieval-Augmented
+Generation architecture that extends the earlier Verifiable Retrieval System and VTR-HRAG designs with
+a controlled agent layer, proof-carrying retrieval contracts, and Item Response Theory (IRT)-calibrated
+evaluation.
+The proposed system preserves the original VTR-HRAG rule that internal tree summaries can route
+retrieval but cannot prove final claims. A VTR-HRAG adds specialized agents for planning, lexical retrieval,
+dense retrieval, table retrieval, tree descent, contradiction search, budget control, and verification. The
+agents do not freely invent answers; they can only propose retrieval actions, evidence expansions, or verifier
+decisions. A final answer is valid only when each atomic claim is supported by leaf-level evidence such as
+paragraph spans, OCR regions, table cells, captions, or page regions.
+The paper formalizes hybrid rank fusion, coverage-aware selection, agentic expected-value-of-information
+(EVI) control, theoretical recall improvements from non-redundant retrieval branches, verification error
+bounds, latency-cost tradeoffs, estimation-error analysis, and IRT-based evaluation. It also proposes an IRT-
+fitted benchmark design with binary and partial-credit outcomes for retrieval completeness, citation precision,
+table accuracy, abstention behavior, and unsupported-claim rate. The central thesis is conditional but strong:
+agentic RAG can outperform static hybrid RAG when agents are constrained by provenance, leaf-only proof
+rules, adaptive budgets, and calibrated evaluation rather than allowed to become an unconstrained reasoning
+loop.
+Keywords: retrieval-augmented generation, Agentic RAG, hybrid search, BM25, dense retrieval, tree chunks,
+GraphRAG, RAPTOR, RRF, IRT, evaluation, citation grounding, provenance, hallucination detection, table
+retrieval, evidence verification
+
+--- PAGE 2 ---
+A VTR-HRAG Research Paper — Shivansh Mukhia 2
+Contents
+1 Source Verification and Scope 3
+2 Introduction 3
+3 Background and Research Gap 3
+3.1 Classic and Hybrid RAG . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 3
+3.2 Tree, Graph, and Contextual Retrieval . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 4
+3.3 Self-Corrective and Agentic RAG . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 4
+3.4 Evaluation Gap . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 4
+4 From VTR-HRAG to A VTR-HRAG 4
+4.1 Prior Design Retained . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 4
+4.2 New Contribution . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 5
+5 Evidence Model 5
+6 Agentic Fusion Architecture 6
+6.1 Agent Roles . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 6
+6.2 Adaptive Agentic Fusion Score . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 7
+6.3 Proof-Carrying Retrieval Contract . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 7
+7 Mathematical Model of Expected Improvement 7
+7.1 Static Hybrid Retrieval Baseline . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 7
+7.2 Agentic Retrieval as Sequential Decision-Making . . . . . . . . . . . . . . . . . . . . . . . . 7
+7.3 Union Recall Gain . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 8
+7.4 Expected Value of Information . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 8
+7.5 Verification Error Bound . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 9
+8 Contextual Retrieval Evidence From Literature 9
+9 IRT-Calibrated Evaluation Model 9
+9.1 Why IRT Instead of Raw Accuracy . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 9
+9.2 Partial-Credit IRT for RAG . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 10
+9.3 Multidimensional IRT . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 10
+9.4 Fitting Procedure . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 11
+9.5 IRT-Gated Retrieval Budget . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 11
+10 Estimation Error Analysis 12
+10.1 Metric Uncertainty . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 12
+10.2 Extraction and OCR Error . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 12
+10.3 Gold Label Incompleteness . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 12
+10.4 Verifier Error . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 13
+11 Evaluation Strategy and Benchmarks 13
+11.1 Public Benchmarks . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 13
+11.2 Core Metrics . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 13
+11.3 Ablation Plan . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 14
+12 Algorithms 14
+12.1 Index-Time Procedure . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 14
+12.2 Query-Time Procedure . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 15
+
+--- PAGE 3 ---
+A VTR-HRAG Research Paper — Shivansh Mukhia 3
+13 Security, Prompt Injection, and Governance 15
+14 Limitations and Countermeasures 15
+15 Implementation Roadmap 16
+16 Conclusion 16
+
+--- PAGE 4 ---
+A VTR-HRAG Research Paper — Shivansh Mukhia 4
+1. Source Verification and Scope
+This paper is a consolidated and upgraded research draft. It extends two supplied prior designs: the first Verifiable
+Retrieval System draft, which focused on exhaustive low-latency PDF retrieval with provenance, exact evidence,
+hybrid retrieval, span-level citation, and verification; and the second VTR-HRAG draft, which upgraded that
+design with typed evidence trees, contextualized tree chunks, reasoning-guided retrieval, and the rule that
+summaries guide while leaves prove.
+External references were checked from primary or near-primary sources where possible. The literature base
+includes the original RAG paper, Dense Passage Retrieval (DPR), BM25/RRF foundations, ColBERT, RAPTOR,
+GraphRAG, Contextual Retrieval, Self-RAG, Corrective RAG, reasoning Agentic RAG surveys, RAGAS, ARES,
+RAGTruth, BEIR, HotpotQA, MuSiQue, KILT, and IRT-based LLM evaluation. Empirical values plotted in
+Figure 3 are source-reported values from Anthropic’s Contextual Retrieval article. Other performance plots are
+explicitly marked as theoretical or illustrative simulations and are not presented as measured benchmark results.
+2. Introduction
+Document intelligence is not simply semantic search. Users often ask questions such as “find every clause related
+to cancellation,” “compare all policy contradictions,” “recover the exact numeric values in every relevant table,”
+or “summarize the corpus while citing every claim.” A static RAG pipeline that embeds chunks, retrieves top-k,
+and generates an answer can fail silently: the missing passage is invisible, the citation may be imprecise, and a
+fluent answer can conceal omission.
+The earlier VTR-HRAG design already addressed this problem by combining lexical retrieval, dense retrieval,
+contextual chunks, table retrieval, tree summaries, graph traversal, coverage selection, reranking, and claim
+verification. Its key discipline was: internal summaries may guide retrieval, but only leaf evidence can prove
+claims. A VTR-HRAG keeps this rule and adds an agentic control layer. The purpose of the agent layer is not
+to make generation more theatrical. It is to make retrieval more adaptive, evidence search more complete, and
+evaluation more calibrated.
+The research question is:
+Can Agentic RAG be fused with verifiable tree-hybrid RAG in a way that improves expected retrieval
+coverage and answer support without exploding hallucination, latency, or evaluation ambiguity?
+This paper argues yes, under four constraints:
+1. Agents must operate over typed tools and typed evidence objects, not free-form hidden reasoning.
+2. Generated summaries, agent notes, and planner outputs may route search but may not be cited as proof.
+3. Agentic expansion must be controlled by expected value of information and IRT-estimated difficulty.
+4. Evaluation must separate retrieval, evidence selection, generation, verification, abstention, latency, and cost.
+3. Background and Research Gap
+3.1. Classic and Hybrid RAG
+Lewis et al. introduced RAG as a way to combine parametric sequence-to-sequence models with non-parametric
+dense retrieval memory for knowledge-intensive NLP tasks [1]. DPR showed that learned dense dual-encoder
+retrieval can outperform a strong BM25 baseline on open-domain QA in several settings, with reported top-20
+passage retrieval improvements of 9–19 absolute points over Lucene-BM25 [2]. However, private document
+intelligence differs from open-domain QA. Exact identifiers, rare legal phrases, table labels, scanned text, page
+layout, and repeated boilerplate can make dense-only retrieval unreliable.
+BM25 remains a strong lexical baseline for exact terms and rare tokens [3]. Reciprocal Rank Fusion (RRF)
+is a practical method for merging rankings from multiple retrieval systems without requiring score calibration
+[4]. ColBERT demonstrates that late interaction can preserve token-level matching strength while reducing
+
+--- PAGE 5 ---
+A VTR-HRAG Research Paper — Shivansh Mukhia 5
+query-time cost compared with full cross-encoder reranking [5]. These results motivate a hybrid strategy: lexical,
+dense, late-interaction, reranking, and structural expansion should be treated as complementary retrieval surfaces,
+not mutually exclusive choices.
+3.2. Tree, Graph, and Contextual Retrieval
+RAPTOR constructs recursive clusters and summaries over text chunks to support retrieval at multiple abstraction
+levels. The authors report strong improvements on reasoning-heavy QA, including a 20-point absolute accuracy
+improvement over the previous best QuALITY benchmark result when paired with GPT-4 [ 6]. GraphRAG
+addresses global corpus questions by building entity graphs and community summaries, showing improvements
+over naive RAG on corpus-wide sensemaking tasks [7]. Anthropic’s Contextual Retrieval adds short chunk-
+specific context before embedding and BM25 indexing; its article reports reductions in top-20 retrieval failure
+from 5.7% to 3.7% with contextual embeddings, to 2.9% when contextual BM25 is added, and to 1.9% when
+reranking is added [8].
+These methods reveal a pattern: long-document RAG improves when retrieval can use higher-level structure.
+The danger is that summaries can compress away exceptions, qualifiers, and numbers. Therefore, A VTR-HRAG
+treats tree and graph summaries as routing objects only. They can point to evidence, but final claims must
+descend to leaves.
+3.3. Self-Corrective and Agentic RAG
+Self-RAG trains models to retrieve and critique using reflection tokens, improving factuality and citation behavior
+relative to static retrieval in reported experiments [ 9]. Corrective RAG (CRAG) adds a lightweight retrieval
+evaluator that decides whether retrieved documents are useful and triggers corrective actions when retrieval is
+weak [10]. Recent surveys of reasoning Agentic RAG categorize the field into predefined reasoning workflows
+and agentic reasoning workflows, highlighting planning, tool use, self-reflection, and dynamic retrieval as key
+directions for real-world tasks [11, 12].
+The open gap is not another agent loop. The gap is a controlled fusion of agents with verifiable evidence
+discipline. Without proof constraints, agents can amplify retrieval errors, over-search irrelevant branches, or
+confidently summarize unsupported material. A VTR-HRAG is designed to avoid that failure.
+3.4. Evaluation Gap
+RAG evaluation is still immature. RAGAS proposes reference-free metrics such as faithfulness, context precision,
+and answer relevancy [13]. ARES automates RAG evaluation using synthetic training data, lightweight judges,
+and prediction-powered inference with limited human labels [14]. RAGTruth provides nearly 18,000 manually
+annotated RAG responses with word-level hallucination labels across domains [15]. BEIR offers a heterogeneous
+retrieval benchmark across 18 datasets and shows BM25 remains robust while reranking and late-interaction
+methods often perform best at higher computational cost [ 16]. HotpotQA and MuSiQue stress multi-hop
+reasoning, with HotpotQA providing sentence-level supporting facts and MuSiQue-Ans containing 25K 2–4 hop
+questions designed to reduce shortcut solving [18, 19].
+However, raw averages can hide benchmark difficulty and model specialization. IRT provides a way to
+separate system ability from item difficulty and discrimination. Recent LLM evaluation work argues that IRT
+can make evaluation more data-efficient and capability-aware; LEGO-IRT reports stable capability estimates
+using 3% of evaluation items and up to 10% lower estimation error by leveraging structural knowledge [ 20].
+A VTR-HRAG therefore uses IRT not as decoration but as a calibration layer for benchmark scoring and adaptive
+retrieval budgets.
+4. From VTR-HRAG to A VTR-HRAG
+4.1. Prior Design Retained
+A VTR-HRAG keeps the core principles from the earlier designs:
+
+--- PAGE 6 ---
+A VTR-HRAG Research Paper — Shivansh Mukhia 6
+• preserve document structure before chunking;
+• index multiple surfaces, including lexical, dense, contextual, table, tree, and graph surfaces;
+• use summaries and internal nodes for navigation, never proof;
+• cite only leaf-level evidence;
+• verify atomic claims after generation;
+• measure omission explicitly.
+4.2. New Contribution
+The upgrade is a proof-carrying agentic layer. Agents may plan, retrieve, expand, criticize, and verify, but
+every action must return typed objects:
+at → (∆Qt, ∆Et, ∆Rt, ∆Bt, ∆Lt), (1)
+where ∆Qt is a query rewrite or subquery, ∆Et is candidate evidence, ∆Rt is a retrieval rationale, ∆Bt is a
+budget decision, and ∆Lt is an audit-log update. None of these are final answer evidence unless ∆Et resolves to
+leaf nodes.
+PDF / HTML /
+logs / tables
+Layout-aware
+ingestion +
+provenance
+T yped evidence
+tree
+Hybrid indexes
+BM25 | dense | table | graph
+Planner agent
+intent + subclaims
+Retriever agents
+lexical / dense / table
+Tree-router agent
+descend to leaves
+Critic agent
+missing / contradictory
+evidence
+Budget
+controller
+IRT/EVI
+Coverage-aware
+fusion + reranking
+Leaf-only proof
+collector
+Claim verifier
+NLI + exact numeric
+checks
+Cited answer, abstentions,
+coverage notes, audit log
+AVTR-HRAG: agentic verification over a tree-structured evidence substrate
+Figure 1: A VTR-HRAG architecture. Agents control retrieval and verification actions, but the evidence substrate remains
+typed and provenance-preserving. Summaries route; leaf nodes prove.
+5. Evidence Model
+Let a corpus be D = {d1, . . . , dn}. Each document is decomposed into typed objects: pages, blocks, paragraphs,
+sentence spans, OCR regions, tables, rows, cells, captions, figures, metadata fields, section nodes, and document
+summaries. The evidence structure is a typed graph/tree:
+G = (V, E), V = Vleaf ∪ Vinternal. (2)
+Leaf nodes are citation-worthy objects. Internal nodes are routing objects. For any internal node v, define:
+support(v) = {ℓ ∈ Vleaf : ℓ is a descendant or provenance-linked leaf of v}. (3)
+
+--- PAGE 7 ---
+A VTR-HRAG Research Paper — Shivansh Mukhia 7
+A final claim c is valid only if:
+valid(c) = 1 ⇐⇒ ∃ℓ ∈ Vleaf : entails(ℓ, c) = 1. (4)
+Table 1: Typed evidence levels in A VTR-HRAG.
+Level Node type Main purpose Final citation?
+L0 Sentence, paragraph span, OCR
+region, table cell, row, caption,
+page region
+Atomic proof and reconstruction Yes
+L1 Passage chunk with leaf pointers Local retrieval and compact
+context
+Yes, by span/leaf
+L2 Section node Parent context and sibling
+expansion
+No
+L3 Page/document summary Routing and overview No
+L4 Topic/community summary Corpus-level navigation No
+L5 Corpus map Planning, query routing,
+benchmark coverage
+No
+6. Agentic Fusion Architecture
+6.1. Agent Roles
+A VTR-HRAG uses agents as typed modules. The architecture is agentic because it can plan and iterate, but it is
+verifiable because each module has a constrained contract.
+Table 2: Agent roles and safety contracts.
+Agent Main action Allowed output Main risk controlled
+Planner Classifies intent, decomposes
+query, predicts evidence
+types
+Subclaims, entities,
+constraints, query family
+Avoids one-shot top-k
+search
+Lexical retriever BM25, phrase, regex,
+metadata filters
+Ranked leaves/passages and
+exact-match spans
+Dense misses exact
+strings
+Dense retriever Semantic search over
+leaf/passages/context chunks
+Ranked candidates with
+vector similarity
+Lexical mismatch
+Table agent Searches cells, rows, headers,
+captions, numeric patterns
+Cell/row candidates and
+table provenance
+Flattened table errors
+Tree-router Searches internal summaries
+and descends to child leaves
+Candidate sections, pages,
+descendant leaves
+Top-k local blindness
+Graph/contradiction
+agent
+Entity and relation hops;
+adversarial contradiction
+search
+Neighbor evidence and
+conflict sets
+Missing multi-hop
+evidence
+Critic agent Checks missing subclaims,
+low coverage, weak citations
+New subqueries or
+abstention suggestions
+Premature synthesis
+Budget controller Uses IRT/EVI and latency
+constraints
+Continue/stop decision and
+budget allocation
+Agentic over-search
+Verifier Extracts atomic claims and
+checks support
+Supported/partial/unsupported/contradicted
+labels
+Hallucination and fake
+citation
+
+--- PAGE 8 ---
+A VTR-HRAG Research Paper — Shivansh Mukhia 8
+6.2. Adaptive Agentic Fusion Score
+For candidate evidence x, query q, and retrieval state ht, define a state-dependent fusion score:
+St(x) =
+X
+r∈R
+wr(ht) 1
+k + rankr(x) + ηC(x, Ssel
+t ) + ρN(x, ht) − µR(x), (5)
+where R is the set of retrieval branches, wr(ht) are agent-selected branch weights, C is a coverage bonus, N is
+novelty relative to already selected evidence, and R is a risk penalty for low OCR confidence, prompt-injection-
+like text, ambiguous table extraction, or weak provenance.
+The branch weights are not learned blindly. A simple operational form is:
+wr(ht) = exp(γT
+r ϕ(ht))P
+r′ exp(γT
+r′ ϕ(ht)), (6)
+where ϕ(ht) contains query features such as numeric/table intent, exact identifier presence, multilingual text,
+entropy of initial retrieval scores, number of unresolved subclaims, and disagreement between branches.
+6.3. Proof-Carrying Retrieval Contract
+Every selected evidence object must carry:
+π(x) = {doc id, version, page, bbox, charspan, objecttype, parentids, texthash, acltags, parserconfidence}.
+(7)
+A final citation is accepted only if the evidence object is reconstructable from its provenance and the verifier
+labels it as supporting the claim.
+7. Mathematical Model of Expected Improvement
+7.1. Static Hybrid Retrieval Baseline
+A static hybrid system retrieves once:
+E0 = selectB (RRF (RBM 25, Rdense, Rctx, Rtab, Rtree)) , (8)
+where B is a fixed evidence budget. This is strong but can fail when the query needs decomposition, contradiction
+search, or multiple rounds of table/section descent.
+7.2. Agentic Retrieval as Sequential Decision-Making
+A VTR-HRAG models retrieval as a finite-horizon policy:
+ht+1 = f(ht, at, ot), a t ∈ A, t = 0, . . . , T, (9)
+where ht is the retrieval state, at is a typed action, and ot is the observation returned by a retrieval or verification
+tool. The utility of the final evidence set ET is:
+U(ET ) = V (coverage(ET )) − λLT − κCostT − ωRiskT . (10)
+The optimal controller chooses:
+π∗ = arg max
+π
+E[U(ET ) | q, G]. (11)
+Proposition 1: action-set dominance. If the static hybrid retrieval action is included in the A VTR-HRAG
+action set and the controller can stop immediately, then the optimal agentic policy has expected utility at least as
+
+--- PAGE 9 ---
+A VTR-HRAG Research Paper — Shivansh Mukhia 9
+high as the static baseline under the same utility function:
+E[U(π∗)] ≥ E[U(πstatic)]. (12)
+This is a theoretical dominance result for an optimal controller. In practice, learned or heuristic controllers must
+be evaluated because bad routing can waste budget.
+7.3. Union Recall Gain
+Let a relevant gold evidence leaf g be found by retrieval branch r with probability pr(g) after parsing and
+indexing. If branch misses are conditionally independent given g and q, then:
+P(g found by at least one branch) = 1 −
+Y
+r∈R
+(1 − pr(g)). (13)
+If agentic expansion adds a non-redundant branch r′ with pr′ (g) > 0, then recall strictly increases:
+1 − (1 − pr′ (g))
+Y
+r
+(1 − pr(g)) > 1 −
+Y
+r
+(1 − pr(g)). (14)
+The assumption of independence is not always true. The practical conclusion is weaker but useful: agentic
+retrieval improves recall when it adds non-redundant evidence discovery paths.
+0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8
+Single-branch probability of finding a gold evidence item
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0Union probability of finding the item
+Model: P(found) = 1 - product_j (1 - r_j). This is a theoretical model, not empirical data.
+Theoretical recall gain from non-redundant retrieval branches
+1 independent branch(es)
+2 independent branch(es)
+3 independent branch(es)
+4 independent branch(es)
+6 independent branch(es)
+Figure 2: Theoretical recall gain from non-redundant retrieval branches. The plot is generated from P(found) =
+1 − Q
+j (1 − rj ) and is not empirical benchmark data.
+7.4. Expected Value of Information
+At step t, an agentic action a is useful only if its expected information gain exceeds its cost:
+EV I(a | ht) = E[V (C(Et ∪ ∆Ea)) − V (C(Et)) | ht] − λ∆La − κ∆Costa. (15)
+A VTR-HRAG continues retrieval while:
+max
+a∈A
+EV I(a | ht) > 0 and Bt < Bmax. (16)
+This prevents the common failure mode where agent loops keep searching without improving evidence coverage.
+
+--- PAGE 10 ---
+A VTR-HRAG Research Paper — Shivansh Mukhia 10
+7.5. Verification Error Bound
+Let C− be the set of unsupported candidate claims produced before verification. Let the verifier’s false-acceptance
+rate on unsupported claims be αv = P(ˆy = supported | c ∈ C−). If all final claims pass through the verifier,
+and unsupported claims are emitted only when falsely accepted, then:
+P(unsupported final claim | c ∈ C−) ≤ αv. (17)
+This bound is useful but conditional. It depends on complete claim extraction, representative verifier calibration
+data, and robust entailment checks for numeric/table claims.
+8. Contextual Retrieval Evidence From Literature
+Anthropic reports that contextualization and reranking reduce top-20 retrieval failure rates in their tests. A VTR-
+HRAG uses these results as motivation for contextual chunk indexing and reranking, not as direct proof of
+A VTR-HRAG’s performance.
+Baseline
+embedding
+Contextual
+embedding
+Contextual
+emb. + BM25
+Contextual
++ BM25 + rerank
+0
+1
+2
+3
+4
+5
+6T op-20 retrieval failure rate (%)
+5.7%
+3.7%
+2.9%
+1.9%
+Data source: Anthropic engineering blog, 2024; metric is 1 - recall@20 across tested domains.
+Source-reported contextual retrieval failure-rate reductions
+Figure 3: Source-reported top-20 retrieval failure rates from Anthropic’s Contextual Retrieval article: baseline 5.7%,
+contextual embeddings 3.7%, contextual embeddings plus contextual BM25 2.9%, and contextual plus BM25 plus reranking
+1.9% [8].
+The key lesson is not that one blog result universally transfers. The lesson is architectural: retrieval surfaces
+stack when they capture different failure modes. A VTR-HRAG adds agentic routing only after hybrid, contextual,
+table, and tree retrieval are already in place.
+9. IRT-Calibrated Evaluation Model
+9.1. Why IRT Instead of Raw Accuracy
+Raw accuracy treats every query as equally difficult. That is wrong for RAG. A single invoice-number lookup,
+a two-hop comparison, a scanned-table extraction, and a corpus-wide contradiction query are not equal. IRT
+models separate system ability from item difficulty and item discrimination.
+Let ysj ∈ {0, 1} be whether system s succeeds on item j under a strict scoring rule. A 2PL model is:
+P(ysj = 1 | θs, aj, bj) = σ(aj(θs − bj)), σ (z) = 1
+1 + e−z , (18)
+
+--- PAGE 11 ---
+A VTR-HRAG Research Paper — Shivansh Mukhia 11
+where θs is system ability, aj is item discrimination, and bj is item difficulty. A 3PL form can include a lower
+asymptote cj:
+P(ysj = 1) = cj + (1 − cj)σ(aj(θs − bj)). (19)
+For RAG, cj can model accidental success from answer priors or answer leakage.
+4
+ 3
+ 2
+ 1
+ 0 1 2 3 4
+System ability theta
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0P(success on item)
+2PL item-response curves for RAG evaluation items
+easy, low discr.: a=0.8, b=-1.0
+medium: a=1.2, b=0.0
+hard, high discr.: a=1.8, b=1.2
+Figure 4: 2PL item-response curves for easy, medium, and hard RAG evaluation items. Higher-discrimination items
+separate systems more sharply near the difficulty point.
+9.2. Partial-Credit IRT for RAG
+Many RAG outputs are not simply right or wrong. A VTR-HRAG uses a partial-credit model for graded outcomes:
+log P(Ysj = k)
+P(Ysj = k − 1) = aj(θs − bjk), k = 1, . . . , K. (20)
+Example scoring levels are:
+• 0: answer unsupported or wrong;
+• 1: answer partially correct but missing key evidence;
+• 2: answer correct with valid citations but incomplete coverage;
+• 3: answer correct, complete, cited, and no unsupported claims.
+9.3. Multidimensional IRT
+A single ability score can hide system strengths. A VTR-HRAG therefore supports multidimensional IRT:
+P(ysj = 1) = σ(aT
+j θs − bj), (21)
+where:
+θs = (θret, θverify , θtable, θmulti, θabstain, θlatency)T . (22)
+Latency can be modeled as a separate latent speed dimension or converted into a utility penalty rather than binary
+correctness.
+
+--- PAGE 12 ---
+A VTR-HRAG Research Paper — Shivansh Mukhia 12
+9.4. Fitting Procedure
+Given responses Y = {ysj}, fit parameters by MAP estimation:
+L =
+X
+s,j
+[ysj log psj + (1 − ysj) log(1− psj)] − 1
+2σ2
+θ
+X
+s
+θ2
+s − 1
+2σ2
+b
+X
+j
+b2
+j . (23)
+A practical fitting loop is:
+1. initialize θs from raw strict accuracy and bj from item failure rate;
+2. alternate updating item parameters (aj, bj) and system abilities θs;
+3. constrain aj > 0 and regularize extreme bj values;
+4. check item fit, residual correlations, and differential item functioning across query families;
+5. report ability estimates with standard errors and confidence intervals.
+The Fisher information for a 2PL item is:
+Ij(θ) = a2
+j Pj(θ)(1 − Pj(θ)). (24)
+For independent items, the approximate standard error is:
+SE(ˆθs) ≈ 1qP
+j Ij(ˆθs)
+. (25)
+200 400 600 800 1000
+Number of calibrated evaluation items
+0.0
+0.1
+0.2
+0.3
+0.4
+0.5Approx. SE of ability estimate
+Approximation: SE(theta_hat) = 1/sqrt(sum a_i^2 P_i(1-P_i)); plotted at P_i=0.5.
+IRT ability-estimation error decreases with calibrated item count
+a=0.8
+a=1.0
+a=1.2
+Figure 5: Approximate IRT ability-estimation error as the number of calibrated items increases. This is derived from Fisher
+information and illustrates why calibrated item banks can reduce evaluation uncertainty.
+9.5. IRT-Gated Retrieval Budget
+The budget controller uses an estimated difficulty prior ˆb(q) and observed retrieval state ht to predict success:
+ˆPsuccess(q, ht) = σ(ˆa(q)(ˆθworkflow − ˆb(q, ht))). (26)
+If ˆPsuccess < τand the EVI is positive, the controller dispatches more retrieval actions. Otherwise, it stops and
+either answers with proof or abstains.
+
+--- PAGE 13 ---
+A VTR-HRAG Research Paper — Shivansh Mukhia 13
+2
+ 1
+ 0 1 2
+Estimated item difficulty b
+0.2
+0.4
+0.6
+0.8
+1.0Predicted success probability
+Illustrative simulation from the paper model; not a measured benchmark result.
+IRT-gated retrieval budget: theoretical effect on difficult items
+static hybrid RAG
+agentic, capped budget
+agentic, sufficient budget
+Figure 6: Theoretical simulation of IRT-gated retrieval budgets. The agentic workflow can improve predicted success on
+harder items, but budget caps reduce the gain. This is a model illustration, not an empirical result.
+10. Estimation Error Analysis
+10.1. Metric Uncertainty
+For a binary metric such as citation support or item success, report Wilson or Bayesian intervals rather than only
+point estimates. For x successes out of n items, the Wilson interval center and half-width are:
+ˆpW = ˆp + z2/(2n)
+1 + z2/n , h W = z
+1 + z2/n
+r
+ˆp(1 − ˆp)
+n + z2
+4n2 . (27)
+For ranking metrics such as nDCG and recall@k, use paired bootstrap over queries. For p95 latency, use
+bootstrap or distributional monitoring because tail latency is non-Gaussian.
+10.2. Extraction and OCR Error
+Let Pparse be the probability that a relevant leaf is correctly extracted and indexed. Even a perfect retriever
+cannot recover evidence that was never extracted:
+P(g recovered) = Pparse(g)Pindex(g)Pretrieve (g)Pselect(g). (28)
+Thus, evaluation must include parser-level gold checks for table cells, OCR spans, reading order, and bounding
+boxes. A strong answer model cannot compensate for missing source objects.
+10.3. Gold Label Incompleteness
+Exhaustive retrieval benchmarks have a special problem: the gold set may itself be incomplete. A VTR-HRAG
+uses pooled judging and capture-recapture style auditing. If two independent annotation passes find n1 and n2
+relevant leaves with overlap m, a rough estimate of total relevant leaves is:
+ˆN = (n1 + 1)(n2 + 1)
+m + 1 − 1. (29)
+This estimate is only a diagnostic, but it exposes when “recall” is being measured against an incomplete gold set.
+
+--- PAGE 14 ---
+A VTR-HRAG Research Paper — Shivansh Mukhia 14
+10.4. Verifier Error
+The verifier itself must be evaluated. Report false accept rate, false reject rate, numeric-check error, table
+entailment error, and contradiction detection error. Verification should use exact string and numeric checks when
+possible and NLI-style entailment only when semantic support is required.
+11. Evaluation Strategy and Benchmarks
+11.1. Public Benchmarks
+Public benchmarks should be used to compare against known baselines, but no single benchmark captures private
+PDF document intelligence. A VTR-HRAG should therefore report both public and private stress-suite results.
+Table 3: Recommended benchmark suite.
+Benchmark Primary use Why it matters Main limitation
+BEIR Retrieval robustness Heterogeneous zero-shot IR
+across 18 datasets; includes
+lexical, sparse, dense, reranking
+comparisons [16]
+Not designed for
+leaf-level citations or
+PDF layout
+KILT Knowledge-intensive
+tasks
+Shared Wikipedia grounding and
+provenance-oriented evaluation
+[17]
+Mostly Wikipedia, not
+enterprise PDFs
+HotpotQA Multi-hop QA Requires reasoning over multiple
+supporting documents with
+sentence-level supporting facts
+[18]
+Wikipedia style, not
+tables/OCR
+MuSiQue Harder multi-hop QA 25K 2–4 hop questions built to
+reduce shortcut reasoning [19]
+Not a citation-first
+PDF benchmark
+RAGTruth Hallucination detection Nearly 18K manually annotated
+RAG responses with word-level
+hallucination labels [15]
+Evaluates
+hallucination more
+than exhaustive
+retrieval
+ARES/RAGAS RAG evaluation
+frameworks
+Context relevance, faithfulness,
+answer relevance, reference-free
+or semi-automated evaluation
+[14, 13]
+Judge reliability and
+domain transfer must
+be audited
+Private VTR suite Real document
+intelligence
+Born-digital PDFs, scans, tables,
+repeated boilerplate, ACL tags,
+absent-answer controls
+Requires human
+labeling and audit
+budget
+11.2. Core Metrics
+Table 4: Evaluation metrics for A VTR-HRAG.
+Metric Layer Definition Error analysis
+Recall@k Retrieval Fraction of gold leaves found in top k Bootstrap over
+queries
+Omission rate Exhaustive
+retrieval
+Fraction of known relevant leaves never
+recovered
+Gold
+incompleteness
+audit
+
+--- PAGE 15 ---
+A VTR-HRAG Research Paper — Shivansh Mukhia 15
+Metric Layer Definition Error analysis
+Citation precision Answering Cited leaves that actually support their
+claims
+Wilson interval
+Citation coverage Answering Atomic claims with at least one valid
+citation
+Wilson interval
+Unsupported-claim
+rate
+Verification Final claims unsupported by cited leaf
+evidence
+Verifier false-accept
+audit
+Table-cell recall Parsing/retrieval Gold table values recovered with correct
+row/column context
+Parser audit
+Cross-document
+completeness
+Retrieval Relevant docs/pages represented in
+selected evidence
+Bootstrap and
+stratified recall
+Abstention precision Answering Abstentions that are justified by
+absent/ambiguous evidence
+Human adjudication
+p50/p95 latency Serving Median and tail query runtime Bootstrap or tail
+distribution
+Cost per successful
+answer
+Serving Total compute/API cost divided by
+verified successful answers
+Budget logs
+IRT ability θ Overall Latent system ability adjusted for item
+difficulty
+Fisher SE /
+posterior CI
+11.3. Ablation Plan
+A VTR-HRAG must prove each added component. The required ablations are:
+1. Dense-only top- k RAG.
+2. BM25-only retrieval.
+3. BM25 + dense + RRF.
+4. Hybrid + reranker.
+5. Hybrid + contextual chunks.
+6. Hybrid + table-aware retrieval.
+7. Hybrid + tree-summary routing.
+8. VTR-HRAG without agents.
+9. A VTR-HRAG with planner and critic agents only.
+10. A VTR-HRAG with full agent layer but no verifier.
+11. Full A VTR-HRAG with verifier and IRT budget controller.
+The “no verifier” ablation is essential because agentic retrieval can increase answer fluency while also increasing
+unsupported synthesis if not checked.
+12. Algorithms
+12.1. Index-Time Procedure
+1. Classify each document as born-digital, scanned, or mixed.
+2. Extract text, OCR spans, pages, blocks, tables, rows, cells, figures, captions, metadata, and layout coordinates.
+3. Assign provenance metadata and stable hashes to every object.
+
+--- PAGE 16 ---
+A VTR-HRAG Research Paper — Shivansh Mukhia 16
+4. Create L0 leaves and L1 passage chunks with leaf pointers.
+5. Build section, page, document, topic, and corpus-map internal nodes.
+6. Generate constrained contextual text for each chunk using only local document structure.
+7. Index raw leaves, contextual chunks, dense vectors, table objects, tree summaries, and optional graph entities.
+8. Validate that random citations reconstruct exact page regions and text spans.
+12.2. Query-Time Procedure
+1. Planner classifies query intent and decomposes into subclaims.
+2. Budget controller estimates difficulty and initial budget.
+3. Lexical, dense, contextual, table, tree, and graph agents retrieve candidates.
+4. Fusion layer combines rankings with adaptive RRF and coverage-aware selection.
+5. Tree-router descends from summaries to leaf descendants.
+6. Critic checks missing subclaims, weak evidence, contradiction risk, and table/numeric gaps.
+7. If EVI is positive and budget remains, generate new subqueries and repeat retrieval.
+8. Proof collector fetches leaf evidence and provenance.
+9. Generator drafts answer from proof set only.
+10. Verifier extracts atomic claims and labels support as supported, partial, unsupported, contradicted, or
+unverifiable.
+11. Unsupported claims are removed, downgraded to uncertainty, or moved to abstention notes.
+12. Return cited answer, evidence coverage notes, and audit log.
+13. Security, Prompt Injection, and Governance
+Retrieved documents are untrusted input. The generator must never treat document content as system instructions.
+A VTR-HRAG uses four defenses:
+1. Instruction separation: retrieved text is evidence, not policy.
+2. Typed tools: agents can call retrieval and verification tools but cannot modify hidden system rules.
+3. ACL propagation: access-control tags stay attached from ingestion to answer.
+4. Injection flagging: prompt-like strings inside documents receive risk penalties and can be quoted only as
+evidence when relevant.
+14. Limitations and Countermeasures
+Table 5: Limitations and countermeasures.
+Limitation Failure mode Countermeasure
+Agentic latency More loops increase p95 response
+time
+IRT/EVI budget controller,
+query-class activation, caching, early
+stop
+
+--- PAGE 17 ---
+A VTR-HRAG Research Paper — Shivansh Mukhia 17
+Limitation Failure mode Countermeasure
+Agent drift Agent follows irrelevant reasoning
+path
+Typed actions, finite-state graph, audit
+logs, verifier gating
+Summary hallucination Tree or graph summaries invent or
+omit details
+Summaries route only; final proof
+must be leaf evidence
+Gold label incompleteness Recall looks high because gold is
+incomplete
+Pooled judging, capture-recapture
+audit, adversarial search
+Verifier false acceptance Unsupported claims pass through Calibrated verifier benchmark, exact
+numeric checks, human review for
+high-stakes domains
+OCR/table extraction
+errors
+Evidence never enters index
+correctly
+Dual parsers, visual rendering audit,
+confidence thresholds, table-specific
+gold tests
+Benchmark overfitting System improves benchmark score
+but not real tasks
+Public + private stress suite, DIF
+checks, periodic item refresh
+IRT misspecification Single latent ability hides
+task-specific behavior
+Multidimensional IRT, partial-credit
+models, residual checks
+Cost explosion Agentic retrieval burns compute EVI action selection, staged retrieval,
+cost per verified answer reporting
+Security leakage Central index bypasses document
+ACLs
+Provenance-level ACLs, field-level
+filtering, per-answer access log
+15. Implementation Roadmap
+Table 6: Implementation roadmap.
+Phase Deliverable Core work Gate
+1 Provenance substrate Layout extraction, OCR, tables,
+bounding boxes, hashes, ACLs
+Citations
+reconstruct
+2 Hybrid retrieval BM25, phrase, dense, RRF, reranker,
+contextual chunks
+Recall@k
+baseline
+3 Tree and table layer Typed evidence tree, table-cell index,
+tree descent
+Table recall
+improves
+4 Verification layer Claim extraction, entailment, numeric
+checks, abstention
+UCR measured
+5 Agentic layer Planner, retriever agents, critic,
+contradiction agent
+Omission drops
+6 IRT evaluation Calibrated item bank, partial-credit
+scoring, ability SE
+Stable rankings
+7 Production hardening Caching, monitoring, p95 latency,
+security audit
+Cost and p95
+within limits
+16. Conclusion
+A VTR-HRAG is a controlled fusion of Agentic RAG and verifiable tree-hybrid RAG. The proposed architecture
+does not claim that agents are automatically better. It claims that agents become useful when they are constrained
+by provenance, typed retrieval tools, coverage objectives, leaf-only proof rules, verification, and IRT-calibrated
+evaluation.
+
+--- PAGE 18 ---
+A VTR-HRAG Research Paper — Shivansh Mukhia 18
+Mathematically, A VTR-HRAG can dominate a static hybrid baseline when its action set includes the baseline
+and the controller chooses actions by expected utility. The union-recall model shows why non-redundant retrieval
+branches reduce evidence miss probability. The IRT model provides a principled way to measure system ability
+while accounting for query difficulty, table extraction, multi-hop reasoning, abstention behavior, and verifier
+reliability. The result is not just a stronger RAG pipeline. It is an evidence engine: it plans, searches, verifies,
+cites, abstains, and measures uncertainty.
+
+--- PAGE 19 ---
+A VTR-HRAG Research Paper — Shivansh Mukhia 19
+References
+[1] P. Lewis et al. “Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks.”NeurIPS, 2020.
+arXiv:2005.11401.
+[2] V . Karpukhin et al. “Dense Passage Retrieval for Open-Domain Question Answering.” EMNLP, 2020.
+arXiv:2004.04906.
+[3] S. Robertson and H. Zaragoza. “The Probabilistic Relevance Framework: BM25 and Beyond.”Foundations
+and Trends in Information Retrieval, 2009.
+[4] G. V . Cormack, C. L. A. Clarke, and S. Buettcher. “Reciprocal Rank Fusion Outperforms Condorcet and
+Individual Rank Learning Methods.” SIGIR, 2009.
+[5] O. Khattab and M. Zaharia. “ColBERT: Efficient and Effective Passage Search via Contextualized Late
+Interaction over BERT.”SIGIR, 2020. arXiv:2004.12832.
+[6] P. Sarthi et al. “RAPTOR: Recursive Abstractive Processing for Tree-Organized Retrieval.”ICLR, 2024.
+arXiv:2401.18059.
+[7] D. Edge et al. “From Local to Global: A Graph RAG Approach to Query-Focused Summarization.” 2024.
+arXiv:2404.16130.
+[8] Anthropic. “Introducing Contextual Retrieval.” Engineering Blog, 19 September 2024.
+[9] A. Asai, Z. Wu, Y . Wang, A. Sil, and H. Hajishirzi. “Self-RAG: Learning to Retrieve, Generate, and
+Critique through Self-Reflection.” 2023. arXiv:2310.11511.
+[10] S.-Q. Yan, J.-C. Gu, Y . Zhu, and Z.-H. Ling. “Corrective Retrieval Augmented Generation.” 2024.
+arXiv:2401.15884.
+[11] J. Liang et al. “Reasoning RAG via System 1 or System 2: A Survey on Reasoning Agentic Retrieval-
+Augmented Generation for Industry Challenges.” Findings of IJCNLP-AACL, 2025.
+[12] A. Singh et al. “Agentic Retrieval-Augmented Generation: A Survey on Agentic RAG.”
+arXiv:2501.09136v4, 2026.
+[13] S. Es, J. James, L. Espinosa-Anke, and S. Schockaert. “RAGAS: Automated Evaluation of Retrieval
+Augmented Generation.” 2023. arXiv:2309.15217.
+[14] J. Saad-Falcon, O. Khattab, C. Potts, and M. Zaharia. “ARES: An Automated Evaluation Framework for
+Retrieval-Augmented Generation Systems.” 2023. arXiv:2311.09476.
+[15] C. Niu et al. “RAGTruth: A Hallucination Corpus for Developing Trustworthy Retrieval-Augmented
+Language Models.” ACL, 2024.
+[16] N. Thakur, N. Reimers, A. Rueckle, A. Srivastava, and I. Gurevych. “BEIR: A Heterogeneous Benchmark
+for Zero-shot Evaluation of Information Retrieval Models.”NeurIPS Datasets and Benchmarks, 2021.
+[17] F. Petroni et al. “KILT: a Benchmark for Knowledge Intensive Language Tasks.” NAACL, 2021.
+arXiv:2009.02252.
+[18] Z. Yang et al. “HotpotQA: A Dataset for Diverse, Explainable Multi-hop Question Answering.”EMNLP,
+2018.
+[19] H. Trivedi et al. “MuSiQue: Multihop Questions via Single-hop Question Composition.” TACL, 2022.
+arXiv:2108.00573.
+
+--- PAGE 20 ---
+A VTR-HRAG Research Paper — Shivansh Mukhia 20
+[20] L. Liao, Q. Zhang, R. Wu, and G. Fang. “Toward a Unified Framework for Data-Efficient Evaluation of
+Large Language Models.” 2025. arXiv:2510.04051.
+[21] R. K. Hambleton, H. Swaminathan, and H. J. Rogers. Fundamentals of Item Response Theory. Sage, 1991.
+[22] R. P. Chalmers. “mirt: A Multidimensional Item Response Theory Package for the R Environment.”Journal
+of Statistical Software, 2012.
+[23] S. Mukhia. “Designing a Verifiable Retrieval System for Exhaustive Low-Latency Query Answering.”
+Internal draft, 30 June 2026.
+[24] S. Mukhia. “VTR-HRAG: Verifiable Tree-Reasoning Hybrid Retrieval-Augmented Generation.” Internal
+draft, 30 June 2026.

@@ -1,0 +1,3 @@
+Screenshot OCR:
+
+Field dashboard shows "International Development 2024", "Annexure 4B", and "voice call pending verification". The visible alert says screenshot evidence should be tied to the PDF annexure before the analyst signs off.

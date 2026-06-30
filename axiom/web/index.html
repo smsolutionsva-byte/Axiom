@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Axiom Operator</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="memory-rail">
+        <div class="rail-top">
+          <div class="brand">
+            <div class="mark">A</div>
+            <div>
+              <strong>Axiom</strong>
+              <span>Offline workspace</span>
+            </div>
+          </div>
+          <button id="setupButton" class="icon-button" type="button" title="Setup">Setup</button>
+        </div>
+
+        <div class="rail-actions">
+          <button id="newChatButton" class="rail-primary" type="button">New chat</button>
+          <button id="addFolderButton" type="button">Folder</button>
+          <input id="workspaceFolderInput" class="hidden-picker" type="file" multiple webkitdirectory directory />
+        </div>
+
+        <section class="status-card">
+          <div class="status-row">
+            <span id="readyDot" class="dot"></span>
+            <div>
+              <strong id="readyText">Checking</strong>
+              <span id="dbPath">Starting local workspace</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="rail-section chat-section">
+          <div class="rail-head">
+            <h2>Folders</h2>
+          </div>
+          <div id="folderList" class="folder-list"></div>
+        </section>
+
+        <section class="rail-section evidence-section">
+          <button id="evidenceRailButton" class="evidence-button" type="button" aria-expanded="false">
+            <span>Evidence</span>
+            <span id="evidenceCount" class="evidence-count">0</span>
+          </button>
+          <div id="evidenceDrawer" class="evidence-drawer" hidden>
+            <div class="rail-head">
+              <h2>Indexed evidence</h2>
+              <button id="refreshSources" type="button">Refresh</button>
+            </div>
+            <div id="sourcesList" class="source-list"></div>
+          </div>
+        </section>
+
+        <section class="rail-section activity-section">
+          <div class="rail-head">
+            <h2>Activity</h2>
+          </div>
+          <div id="activityList" class="activity-list"></div>
+        </section>
+      </aside>
+
+      <main class="operator-shell">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Local thread</p>
+            <h1>Evidence Operator</h1>
+          </div>
+          <div class="top-actions">
+            <button id="questionButton" type="button">Ask Card</button>
+            <button id="sourcesButton" type="button">Sources</button>
+            <button id="clearWidgets" type="button">Clear</button>
+            <button id="sidePanelToggle" class="panel-toggle" type="button" title="Toggle side panel" aria-label="Toggle side panel"></button>
+          </div>
+        </header>
+
+        <section class="stage">
+          <section class="chat-panel" aria-label="Axiom chat">
+            <div class="context-strip">
+              <div>
+                <p class="eyebrow">Attached context</p>
+                <div id="contextChips" class="context-chips"></div>
+              </div>
+              <button id="contextButton" type="button">Manage</button>
+            </div>
+            <div id="messages" class="messages"></div>
+            <div id="quickActions" class="quick-actions"></div>
+            <form id="chatForm" class="composer">
+              <input id="fileInput" class="hidden-picker" type="file" multiple />
+              <input id="folderInput" class="hidden-picker" type="file" multiple webkitdirectory directory />
+              <div id="attachmentTray" class="attachment-tray" hidden></div>
+              <button id="attachButton" class="attach-button" type="button" title="Add files or folders" aria-label="Add files or folders">+</button>
+              <textarea id="chatInput" rows="1" placeholder="Ask Axiom"></textarea>
+              <button id="sendButton" type="submit">Send</button>
+            </form>
+          </section>
+
+          <section class="widget-panel" aria-label="Live widgets">
+            <div class="widget-panel-head">
+              <div>
+                <p class="eyebrow">Task sidebar</p>
+                <h2 id="widgetTitle">Ready</h2>
+              </div>
+              <div class="side-tabs" aria-label="Panel tabs">
+                <span class="side-tab active">Artifacts</span>
+                <span class="side-tab">Run</span>
+                <span class="side-tab">Review</span>
+              </div>
+            </div>
+            <div id="widgetStack" class="widget-stack">
+              <div class="empty-widget">
+                <strong>No artifact selected</strong>
+                <span>Ask Axiom to open a report, graph, image, approval, or source list.</span>
+              </div>
+            </div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
