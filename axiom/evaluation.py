@@ -285,7 +285,7 @@ def apply_official_ragas(cases: list[BenchmarkCase], results: list[CaseResult], 
             from langchain_ollama import ChatOllama
             from langchain_ollama import OllamaEmbeddings
             llm = ChatOllama(model=evaluator_model or "qwen2.5:7b")
-            embeddings = OllamaEmbeddings(model=evaluator_model or "qwen2.5:7b")
+            embeddings = OllamaEmbeddings(model="nomic-embed-text")
         else:
             from langchain_openai import ChatOpenAI, OpenAIEmbeddings
             llm = ChatOpenAI(model=evaluator_model or "gpt-4o-mini")
