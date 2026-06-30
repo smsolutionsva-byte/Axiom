@@ -74,6 +74,8 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark.add_argument("--out", default="exports/benchmarks")
     benchmark.add_argument("--label", default="biorag")
     benchmark.add_argument("--json", action="store_true")
+    benchmark.add_argument("--evaluator", default=None, choices=["ollama", "openai"], help="Use official framework evaluator")
+    benchmark.add_argument("--evaluator-model", default="qwen2.5:7b", help="Model to use for evaluator")
 
     imagegen = subparsers.add_parser("imagegen", help="Generate images with an offline local image model")
     imagegen.add_argument("--db", default=None, help="SQLite database path")
@@ -331,7 +333,10 @@ def main(argv: list[str] | None = None) -> int:
             ingest_path(conn, args.corpus)
         cases = load_benchmark_cases(args.dataset)
         modes = [item.strip() for item in args.modes.split(",") if item.strip()]
-        result = run_benchmark(conn, cases, modes=modes, top_k=args.top_k)
+        result = run_benchmark(
+            conn, cases, modes=modes, top_k=args.top_k,
+            evaluator=args.evaluator, evaluator_model=args.evaluator_model
+        )
         paths = write_benchmark_report(result, args.out, label=args.label)
         if args.json:
             print(json.dumps({"report": result, "paths": paths}, indent=2))
