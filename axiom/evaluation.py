@@ -45,6 +45,7 @@ class CaseResult:
     matched_sources: list[str]
     matched_terms: list[str]
     returned_sources: list[str]
+    returned_contexts: list[str]
     context_precision_proxy: float
     context_recall_proxy: float
     faithfulness_proxy: float
@@ -77,6 +78,8 @@ def run_benchmark(
     *,
     modes: list[str] | tuple[str, ...] = DEFAULT_MODES,
     top_k: int = 5,
+    evaluator: str | None = None,
+    evaluator_model: str | None = None,
 ) -> dict[str, object]:
     results: list[CaseResult] = []
     for case in cases:
@@ -85,6 +88,10 @@ def run_benchmark(
             hits = retrieve_for_mode(conn, case.question, mode=mode, top_k=top_k)
             latency_ms = (time.perf_counter() - start) * 1000.0
             results.append(score_case(case, mode, hits, latency_ms=latency_ms))
+            
+    if evaluator in ("ollama", "openai"):
+        results = apply_official_ragas(cases, results, evaluator, evaluator_model)
+        
     return {
         "cases": [case.__dict__ for case in cases],
         "results": [result.__dict__ for result in results],
@@ -142,7 +149,8 @@ def hits_from_ranked(conn: sqlite3.Connection, query: str, ranked: list[tuple[st
 
 def score_case(case: BenchmarkCase, mode: str, hits: list[SearchHit], *, latency_ms: float) -> CaseResult:
     returned_sources = [hit.file_name for hit in hits]
-    combined = "\n".join(f"{hit.file_name}\n{hit.text}\n{hit.snippet}" for hit in hits).lower()
+    returned_contexts = [f"{hit.text}\n{hit.snippet}" for hit in hits]
+    combined = "\n".join(returned_contexts).lower()
     matched_sources = sorted(
         {
             expected
@@ -171,6 +179,7 @@ def score_case(case: BenchmarkCase, mode: str, hits: list[SearchHit], *, latency
         matched_sources=matched_sources,
         matched_terms=matched_terms,
         returned_sources=returned_sources,
+        returned_contexts=returned_contexts,
         context_precision_proxy=round(context_precision, 4),
         context_recall_proxy=round(term_recall, 4),
         faithfulness_proxy=round(faithfulness, 4),
@@ -256,6 +265,84 @@ def _avg(values) -> float:
     if not rows:
         return 0.0
     return round(sum(rows) / len(rows), 4)
+
+
+def apply_official_ragas(cases: list[BenchmarkCase], results: list[CaseResult], evaluator: str, evaluator_model: str | None) -> list[CaseResult]:
+    try:
+        from ragas import evaluate
+        from datasets import Dataset
+        from ragas.metrics import context_precision, faithfulness, answer_relevancy, context_recall
+        
+        if evaluator == "ollama":
+            from langchain_ollama import ChatOllama
+            from langchain_ollama import OllamaEmbeddings
+            llm = ChatOllama(model=evaluator_model or "qwen2.5:7b")
+            embeddings = OllamaEmbeddings(model=evaluator_model or "qwen2.5:7b")
+        else:
+            from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+            llm = ChatOpenAI(model=evaluator_model or "gpt-4o-mini")
+            embeddings = OpenAIEmbeddings()
+            
+    except ImportError as e:
+        print(f"Warning: Could not import required eval libraries. Install with pip install -e .[eval] langchain langchain-community. Error: {e}")
+        return results
+
+    grouped = {}
+    for res in results:
+        grouped.setdefault(res.mode, []).append(res)
+        
+    case_map = {c.case_id: c for c in cases}
+    updated_results = []
+    
+    from dataclasses import replace
+    import pandas as pd
+    
+    for mode, mode_results in grouped.items():
+        data = {
+            "question": [],
+            "answer": [],
+            "contexts": [],
+            "ground_truth": []
+        }
+        for res in mode_results:
+            case = case_map[res.case_id]
+            data["question"].append(case.question)
+            data["answer"].append(" ".join(res.matched_terms) if res.matched_terms else "I don't know based on the context.")
+            data["contexts"].append(res.returned_contexts)
+            data["ground_truth"].append(" ".join(case.expected_terms) if case.expected_terms else "None")
+            
+        dataset = Dataset.from_dict(data)
+        metrics = [context_precision, context_recall, faithfulness, answer_relevancy]
+        
+        print(f"Running actual Ragas evaluation for {mode} mode with {evaluator} (model={evaluator_model or 'default'})...")
+        try:
+            from ragas.run_config import RunConfig
+            run_config = RunConfig(timeout=300, max_retries=5, max_workers=2)
+            eval_result = evaluate(
+                dataset, 
+                metrics=metrics, 
+                llm=llm, 
+                embeddings=embeddings, 
+                run_config=run_config, 
+                raise_exceptions=False
+            )
+            df = eval_result.to_pandas()
+            
+            for i, res in enumerate(mode_results):
+                row = df.iloc[i]
+                new_res = replace(
+                    res,
+                    context_precision_proxy=row.get("context_precision", res.context_precision_proxy),
+                    context_recall_proxy=row.get("context_recall", res.context_recall_proxy),
+                    faithfulness_proxy=row.get("faithfulness", res.faithfulness_proxy),
+                    answer_relevancy_proxy=row.get("answer_relevancy", res.answer_relevancy_proxy),
+                )
+                updated_results.append(new_res)
+        except Exception as e:
+            print(f"Ragas evaluation failed: {e}")
+            updated_results.extend(mode_results)
+            
+    return updated_results
 
 
 def context_precision_proxy(case: BenchmarkCase, hits: list[SearchHit]) -> float:
