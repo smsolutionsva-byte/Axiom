@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import sqlite3
 import time
@@ -205,17 +206,16 @@ def summarize_results(results: list[CaseResult]) -> dict[str, dict[str, float]]:
         grouped.setdefault(result.mode, []).append(result)
     summary: dict[str, dict[str, float]] = {}
     for mode, rows in grouped.items():
-        count = max(len(rows), 1)
         summary[mode] = {
-            "hit_at_k": round(sum(row.hit_at_k for row in rows) / count, 4),
-            "mrr": round(sum(row.mrr for row in rows) / count, 4),
-            "source_recall": round(sum(row.source_recall for row in rows) / count, 4),
-            "term_recall": round(sum(row.term_recall for row in rows) / count, 4),
-            "ragas_context_precision_proxy": round(sum(row.context_precision_proxy for row in rows) / count, 4),
-            "ragas_context_recall_proxy": round(sum(row.context_recall_proxy for row in rows) / count, 4),
-            "ragas_faithfulness_proxy": round(sum(row.faithfulness_proxy for row in rows) / count, 4),
-            "ragas_answer_relevancy_proxy": round(sum(row.answer_relevancy_proxy for row in rows) / count, 4),
-            "avg_latency_ms": round(sum(row.latency_ms for row in rows) / count, 3),
+            "hit_at_k": _avg(row.hit_at_k for row in rows),
+            "mrr": _avg(row.mrr for row in rows),
+            "source_recall": _avg(row.source_recall for row in rows),
+            "term_recall": _avg(row.term_recall for row in rows),
+            "ragas_context_precision_proxy": _avg(row.context_precision_proxy for row in rows),
+            "ragas_context_recall_proxy": _avg(row.context_recall_proxy for row in rows),
+            "ragas_faithfulness_proxy": _avg(row.faithfulness_proxy for row in rows),
+            "ragas_answer_relevancy_proxy": _avg(row.answer_relevancy_proxy for row in rows),
+            "avg_latency_ms": _avg((row.latency_ms for row in rows), digits=3),
         }
     return summary
 
@@ -262,11 +262,18 @@ def evaluator_framework_summary(results: list[CaseResult]) -> dict[str, dict[str
     return framework_summary
 
 
-def _avg(values) -> float:
-    rows = list(values)
+def _avg(values, *, digits: int = 4) -> float:
+    rows = [float(value) for value in values if is_finite_number(value)]
     if not rows:
         return 0.0
-    return round(sum(rows) / len(rows), 4)
+    return round(sum(rows) / len(rows), digits)
+
+
+def is_finite_number(value: object) -> bool:
+    try:
+        return math.isfinite(float(value))
+    except (TypeError, ValueError):
+        return False
 
 
 def apply_official_ragas(cases: list[BenchmarkCase], results: list[CaseResult], evaluator: str, evaluator_model: str | None) -> list[CaseResult]:
@@ -327,22 +334,57 @@ def apply_official_ragas(cases: list[BenchmarkCase], results: list[CaseResult], 
                 raise_exceptions=False
             )
             df = eval_result.to_pandas()
+            fallback_count = 0
             
             for i, res in enumerate(mode_results):
                 row = df.iloc[i]
+                context_precision_value, used_context_precision_fallback = official_metric_or_fallback(
+                    row, "context_precision", res.context_precision_proxy
+                )
+                context_recall_value, used_context_recall_fallback = official_metric_or_fallback(
+                    row, "context_recall", res.context_recall_proxy
+                )
+                faithfulness_value, used_faithfulness_fallback = official_metric_or_fallback(
+                    row, "faithfulness", res.faithfulness_proxy
+                )
+                answer_relevancy_value, used_answer_relevancy_fallback = official_metric_or_fallback(
+                    row, "answer_relevancy", res.answer_relevancy_proxy
+                )
+                fallback_count += sum(
+                    [
+                        used_context_precision_fallback,
+                        used_context_recall_fallback,
+                        used_faithfulness_fallback,
+                        used_answer_relevancy_fallback,
+                    ]
+                )
                 new_res = replace(
                     res,
-                    context_precision_proxy=row.get("context_precision", res.context_precision_proxy),
-                    context_recall_proxy=row.get("context_recall", res.context_recall_proxy),
-                    faithfulness_proxy=row.get("faithfulness", res.faithfulness_proxy),
-                    answer_relevancy_proxy=row.get("answer_relevancy", res.answer_relevancy_proxy),
+                    context_precision_proxy=context_precision_value,
+                    context_recall_proxy=context_recall_value,
+                    faithfulness_proxy=faithfulness_value,
+                    answer_relevancy_proxy=answer_relevancy_value,
                 )
                 updated_results.append(new_res)
+            if fallback_count:
+                print(
+                    f"Ragas returned {fallback_count} invalid metric value(s) for {mode}; "
+                    "kept deterministic proxy scores for those cells."
+                )
         except Exception as e:
             print(f"Ragas evaluation failed: {e}")
             updated_results.extend(mode_results)
             
     return updated_results
+
+
+def official_metric_or_fallback(row: object, metric: str, fallback: float) -> tuple[float, bool]:
+    value = row.get(metric, fallback) if hasattr(row, "get") else fallback
+    if is_finite_number(value):
+        return round(float(value), 4), False
+    if is_finite_number(fallback):
+        return round(float(fallback), 4), True
+    return 0.0, True
 
 
 def ragas_sample_payload(case: BenchmarkCase, result: CaseResult) -> dict[str, object]:

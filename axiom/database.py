@@ -109,6 +109,21 @@ def init_db(conn: sqlite3.Connection) -> None:
             updated_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS sphere_neighbors (
+            sphere_id TEXT NOT NULL,
+            neighbor_sphere_id TEXT NOT NULL,
+            rank INTEGER NOT NULL,
+            ring INTEGER NOT NULL,
+            similarity REAL NOT NULL,
+            relation_hint TEXT NOT NULL,
+            chain_group TEXT NOT NULL,
+            index_version TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(sphere_id, neighbor_sphere_id),
+            FOREIGN KEY(sphere_id) REFERENCES sphere_summaries(sphere_id) ON DELETE CASCADE,
+            FOREIGN KEY(neighbor_sphere_id) REFERENCES sphere_summaries(sphere_id) ON DELETE CASCADE
+        );
+
         CREATE TABLE IF NOT EXISTS biorag_tree_nodes (
             node_id TEXT PRIMARY KEY,
             parent_node_id TEXT,
@@ -225,6 +240,9 @@ def init_db(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_cross_links_target ON cross_modal_links(target_chunk_id);
         CREATE INDEX IF NOT EXISTS idx_cross_links_type ON cross_modal_links(link_type);
         CREATE INDEX IF NOT EXISTS idx_spheres_strength ON sphere_summaries(strength);
+        CREATE INDEX IF NOT EXISTS idx_sphere_neighbors_source ON sphere_neighbors(sphere_id, index_version);
+        CREATE INDEX IF NOT EXISTS idx_sphere_neighbors_target ON sphere_neighbors(neighbor_sphere_id, index_version);
+        CREATE INDEX IF NOT EXISTS idx_sphere_neighbors_group ON sphere_neighbors(chain_group, ring);
         CREATE INDEX IF NOT EXISTS idx_tree_nodes_parent ON biorag_tree_nodes(parent_node_id);
         CREATE INDEX IF NOT EXISTS idx_tree_nodes_type ON biorag_tree_nodes(node_type);
         CREATE INDEX IF NOT EXISTS idx_hex_neighbors_chunk ON hex_neighbors(chunk_id);

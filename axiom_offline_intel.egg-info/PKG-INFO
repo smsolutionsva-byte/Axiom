@@ -1,0 +1,38 @@
+Metadata-Version: 2.4
+Name: axiom-offline-intel
+Version: 0.1.0
+Summary: Offline-first multimodal intelligence retrieval starter with strict citations
+Author: Axiom
+Requires-Python: >=3.11
+Provides-Extra: api
+Requires-Dist: fastapi; extra == "api"
+Requires-Dist: uvicorn; extra == "api"
+Provides-Extra: pdf
+Requires-Dist: pymupdf; extra == "pdf"
+Provides-Extra: docx
+Requires-Dist: python-docx; extra == "docx"
+Provides-Extra: ocr
+Requires-Dist: pillow; extra == "ocr"
+Requires-Dist: pytesseract; extra == "ocr"
+Provides-Extra: vision
+Requires-Dist: pillow; extra == "vision"
+Requires-Dist: mss; extra == "vision"
+Requires-Dist: pytesseract; extra == "vision"
+Provides-Extra: production-ocr
+Requires-Dist: paddleocr; extra == "production-ocr"
+Provides-Extra: production-retrieval
+Requires-Dist: faiss-cpu; extra == "production-retrieval"
+Requires-Dist: rank-bm25; extra == "production-retrieval"
+Requires-Dist: sentence-transformers; extra == "production-retrieval"
+Provides-Extra: imagegen
+Requires-Dist: diffusers; extra == "imagegen"
+Requires-Dist: transformers; extra == "imagegen"
+Requires-Dist: accelerate; extra == "imagegen"
+Requires-Dist: safetensors; extra == "imagegen"
+Requires-Dist: torch; extra == "imagegen"
+Requires-Dist: Pillow; extra == "imagegen"
+Provides-Extra: eval
+Requires-Dist: ragas; extra == "eval"
+Requires-Dist: datasets; extra == "eval"
+Requires-Dist: trulens; extra == "eval"
+Requires-Dist: deepeval; extra == "eval"

@@ -169,12 +169,14 @@ def coverage_select(
     seen_pages: set[tuple[str, int | None]] = set()
     seen_modalities: set[str] = set()
 
-    pool: list[tuple[str, float, sqlite3.Row, float]] = []
+    pool: list[tuple[str, float, sqlite3.Row, float, float]] = []
     for chunk_id, base_score in candidates:
         chunk = get_chunk(conn, chunk_id)
         if chunk is None or chunk["chunk_kind"] != "child":
             continue
-        overlap = lexical_overlap(query_tokens, evidence_search_text(chunk))
+        search_text = evidence_search_text(chunk)
+        overlap = lexical_overlap(query_tokens, search_text)
+        identifier_overlap = exact_identifier_overlap(query_tokens, search_text)
         novelty = 0.0
         if chunk["file_id"] not in seen_files:
             novelty += 0.018
@@ -184,12 +186,20 @@ def coverage_select(
             novelty += 0.006
         risk = prompt_injection_risk(chunk["text_content"]) * 0.025
         redundancy = max((chunk_redundancy(chunk, existing) for existing in selected_chunks), default=0.0)
-        pool.append((chunk_id, base_score + overlap * 0.085 + novelty - redundancy * 0.025 - risk, chunk, overlap))
+        pool.append(
+            (
+                chunk_id,
+                base_score + overlap * 0.085 + identifier_overlap * 0.11 + novelty - redundancy * 0.025 - risk,
+                chunk,
+                overlap,
+                identifier_overlap,
+            )
+        )
 
-    for chunk_id, score, chunk, overlap in sorted(pool, key=lambda item: item[1], reverse=True):
+    for chunk_id, score, chunk, overlap, identifier_overlap in sorted(pool, key=lambda item: item[1], reverse=True):
         if any(chunk_id == selected_id for selected_id, _ in selected):
             continue
-        if min_relevance and selected and overlap < min_relevance:
+        if min_relevance and selected and overlap < min_relevance and identifier_overlap <= 0:
             continue
         redundancy = max((chunk_redundancy(chunk, existing) for existing in selected_chunks), default=0.0)
         if redundancy > 0.92 and len(selected) >= 1:
@@ -202,6 +212,14 @@ def coverage_select(
         if len(selected) >= top_k:
             break
     return selected
+
+
+def exact_identifier_overlap(query_tokens: list[str], text: str) -> float:
+    identifiers = {token for token in query_tokens if any(char.isdigit() for char in token)}
+    if not identifiers:
+        return 0.0
+    text_tokens = set(tokenize(text))
+    return len(identifiers & text_tokens) / max(len(identifiers), 1)
 
 
 def chunk_redundancy(left: sqlite3.Row, right: sqlite3.Row) -> float:

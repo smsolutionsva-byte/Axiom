@@ -29,9 +29,11 @@ from .retrieval import (
 )
 
 
-BIORAG_INDEX_VERSION = "biorag-v3"
+BIORAG_INDEX_VERSION = "biorag-v4"
 HEX_CELL_RADIUS = 0.24
 HEX_DIRECTIONS = ((1, 0), (1, -1), (0, -1), (-1, 0), (-1, 1), (0, 1))
+SPHERE_HONEYCOMB_RINGS = 2
+HEX_EXPANSION_RINGS = 2
 WEB_DAMPING = 0.64
 HEBBIAN_LEARNING_RATE = 0.18
 HEBBIAN_DECAY_HALF_LIFE_DAYS = 21.0
@@ -83,6 +85,7 @@ class EnergyBudget:
 def refresh_biorag_index(conn: sqlite3.Connection, focus_child_ids: list[str] | None = None) -> int:
     build_tree_index(conn)
     build_sphere_index(conn)
+    build_sphere_honeycomb(conn)
     return build_hex_neighbors(conn, focus_child_ids)
 
 
@@ -93,6 +96,10 @@ def ensure_biorag_index(conn: sqlite3.Connection) -> None:
     if not child_count:
         return
     sphere_count = conn.execute("SELECT COUNT(*) AS count FROM sphere_summaries").fetchone()["count"]
+    sphere_neighbor_count = conn.execute(
+        "SELECT COUNT(*) AS count FROM sphere_neighbors WHERE index_version = ?",
+        (BIORAG_INDEX_VERSION,),
+    ).fetchone()["count"]
     tree_count = conn.execute("SELECT COUNT(*) AS count FROM biorag_tree_nodes").fetchone()["count"]
     hex_count = conn.execute(
         "SELECT COUNT(*) AS count FROM hex_neighbors WHERE index_version = ?",
@@ -102,7 +109,8 @@ def ensure_biorag_index(conn: sqlite3.Connection) -> None:
         "SELECT COUNT(*) AS count FROM biorag_chunk_cells WHERE index_version = ?",
         (BIORAG_INDEX_VERSION,),
     ).fetchone()["count"]
-    if sphere_count and tree_count and hex_count and cell_count >= min(child_count, 160):
+    sphere_neighbors_ready = sphere_count <= 1 or sphere_neighbor_count > 0
+    if sphere_count and sphere_neighbors_ready and tree_count and hex_count and cell_count >= min(child_count, 160):
         return
     refresh_biorag_index(conn)
     conn.commit()
@@ -175,9 +183,10 @@ def biorag_status(conn: sqlite3.Connection) -> dict[str, object]:
         "chunks": "SELECT COUNT(*) AS count FROM content_chunks WHERE chunk_kind = 'child'",
         "spheres": "SELECT COUNT(*) AS count FROM sphere_summaries",
         "tree_nodes": "SELECT COUNT(*) AS count FROM biorag_tree_nodes",
-        "hex_neighbors": "SELECT COUNT(*) AS count FROM hex_neighbors",
-        "hex_cells": "SELECT COUNT(*) AS count FROM biorag_hex_cells",
-        "chunk_cells": "SELECT COUNT(*) AS count FROM biorag_chunk_cells",
+        "sphere_neighbors": f"SELECT COUNT(*) AS count FROM sphere_neighbors WHERE index_version = '{BIORAG_INDEX_VERSION}'",
+        "hex_neighbors": f"SELECT COUNT(*) AS count FROM hex_neighbors WHERE index_version = '{BIORAG_INDEX_VERSION}'",
+        "hex_cells": f"SELECT COUNT(*) AS count FROM biorag_hex_cells WHERE index_version = '{BIORAG_INDEX_VERSION}'",
+        "chunk_cells": f"SELECT COUNT(*) AS count FROM biorag_chunk_cells WHERE index_version = '{BIORAG_INDEX_VERSION}'",
         "web_links": "SELECT COUNT(*) AS count FROM cross_modal_links",
         "edge_weights": "SELECT COUNT(*) AS count FROM biorag_edge_weights",
         "adaptive_paths": "SELECT COUNT(*) AS count FROM adaptive_path_stats",
@@ -197,6 +206,7 @@ def biorag_status(conn: sqlite3.Connection) -> dict[str, object]:
         "ready": bool(
             counts["chunks"]
             and counts["spheres"]
+            and (counts["spheres"] <= 1 or counts["sphere_neighbors"])
             and counts["tree_nodes"]
             and counts["hex_neighbors"]
             and counts["hex_cells"]
@@ -381,6 +391,137 @@ def build_sphere_index(conn: sqlite3.Connection, *, max_spheres: int = 32) -> No
                 now,
             ),
         )
+    if active_ids:
+        placeholders = ",".join("?" for _ in active_ids)
+        conn.execute(f"DELETE FROM sphere_summaries WHERE sphere_id NOT IN ({placeholders})", tuple(sorted(active_ids)))
+
+
+def build_sphere_honeycomb(
+    conn: sqlite3.Connection,
+    *,
+    max_rings: int = SPHERE_HONEYCOMB_RINGS,
+    min_similarity: float = 0.08,
+) -> int:
+    spheres = conn.execute(
+        """
+        SELECT *
+        FROM sphere_summaries
+        ORDER BY strength DESC, chunk_count DESC, sphere_name ASC
+        """
+    ).fetchall()
+    conn.execute("DELETE FROM sphere_neighbors WHERE index_version = ?", (BIORAG_INDEX_VERSION,))
+    if len(spheres) < 2:
+        return 0
+
+    now = utc_now()
+    max_neighbors = 6 * sum(range(1, max_rings + 1))
+    inserted = 0
+    for sphere in spheres:
+        scored: list[tuple[sqlite3.Row, float, str]] = []
+        for candidate in spheres:
+            if candidate["sphere_id"] == sphere["sphere_id"]:
+                continue
+            similarity, hint = sphere_similarity(sphere, candidate)
+            if similarity < min_similarity:
+                continue
+            scored.append((candidate, similarity, hint))
+
+        for rank, (candidate, similarity, hint) in enumerate(
+            sorted(scored, key=lambda item: item[1], reverse=True)[:max_neighbors],
+            start=1,
+        ):
+            ring = honeycomb_ring_for_rank(rank)
+            chain_group = stable_id(
+                "biorag-sphere-chain",
+                BIORAG_INDEX_VERSION,
+                sphere["sphere_id"],
+                ring,
+                length=24,
+            )
+            conn.execute(
+                """
+                INSERT INTO sphere_neighbors (
+                    sphere_id, neighbor_sphere_id, rank, ring, similarity,
+                    relation_hint, chain_group, index_version, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(sphere_id, neighbor_sphere_id) DO UPDATE SET
+                    rank = excluded.rank,
+                    ring = excluded.ring,
+                    similarity = excluded.similarity,
+                    relation_hint = excluded.relation_hint,
+                    chain_group = excluded.chain_group,
+                    index_version = excluded.index_version,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    sphere["sphere_id"],
+                    candidate["sphere_id"],
+                    rank,
+                    ring,
+                    similarity,
+                    hint,
+                    chain_group,
+                    BIORAG_INDEX_VERSION,
+                    now,
+                ),
+            )
+            insert_sphere_bridge_link(conn, sphere, candidate, similarity, now)
+            inserted += 1
+    return inserted
+
+
+def sphere_similarity(left: sqlite3.Row, right: sqlite3.Row) -> tuple[float, str]:
+    left_terms = set(json_list(left["topic_terms_json"]))
+    right_terms = set(json_list(right["topic_terms_json"]))
+    term_overlap = len(left_terms & right_terms) / max(1, min(len(left_terms), len(right_terms)))
+    left_docs = set(json_list(left["document_ids_json"]))
+    right_docs = set(json_list(right["document_ids_json"]))
+    document_overlap = len(left_docs & right_docs) / max(1, min(len(left_docs), len(right_docs)))
+    semantic = max(cosine(load_vector(left["centroid_vector_json"]), load_vector(right["centroid_vector_json"])), 0.0)
+    score = semantic * 0.62 + term_overlap * 0.3 + document_overlap * 0.08
+    if term_overlap >= semantic and term_overlap >= document_overlap:
+        hint = "keyword_chain"
+    elif document_overlap >= semantic:
+        hint = "document_bridge"
+    else:
+        hint = "semantic_chain"
+    return round(score, 6), hint
+
+
+def honeycomb_ring_for_rank(rank: int) -> int:
+    capacity = 0
+    ring = 1
+    while True:
+        capacity += 6 * ring
+        if rank <= capacity:
+            return ring
+        ring += 1
+
+
+def insert_sphere_bridge_link(
+    conn: sqlite3.Connection,
+    left: sqlite3.Row,
+    right: sqlite3.Row,
+    similarity: float,
+    now: str,
+) -> None:
+    left_support = json_list(left["support_chunk_ids_json"])
+    right_support = json_list(right["support_chunk_ids_json"])
+    if not left_support or not right_support:
+        return
+    source, target = sorted([left_support[0], right_support[0]])
+    if source == target:
+        return
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO cross_modal_links (
+            source_chunk_id, target_chunk_id, confidence_score, link_type, created_at
+        )
+        VALUES (?, ?, ?, 'sphere', ?)
+        """,
+        (source, target, min(max(similarity, 0.08), 0.99), now),
+    )
 
 
 def build_hex_neighbors(
@@ -635,26 +776,87 @@ def hex_to_point(q: int, r: int, size: float) -> tuple[float, float]:
 def sphere_route(conn: sqlite3.Connection, query: str, *, limit: int) -> list[tuple[str, float]]:
     query_vector = embed_text(query)
     query_tokens = tokenize(query)
-    candidates: list[tuple[str, float]] = []
-    for row in conn.execute("SELECT * FROM sphere_summaries ORDER BY strength DESC, chunk_count DESC LIMIT 80"):
-        terms = " ".join(json_list(row["topic_terms_json"]))
-        center = load_vector(row["centroid_vector_json"])
-        query_distance = vector_distance(query_vector, center)
-        radius = float(row["radius"] or 0.0)
-        shell_std = max(float(row["shell_std"] or 0.0), 0.04)
-        shell_alignment = math.exp(-abs(query_distance - radius) / shell_std) if radius else 0.0
-        score = (
-            cosine(query_vector, center) * 0.64
-            + lexical_overlap(query_tokens, f"{row['summary_text']} {terms}") * 0.22
-            + shell_alignment * 0.08
-            + min(float(row["density"] or 0.0), 1.0) * 0.025
-            + min(float(row["strength"] or 1.0), 3.0) * 0.015
+    sphere_rows = conn.execute(
+        """
+        SELECT *
+        FROM sphere_summaries
+        ORDER BY strength DESC, chunk_count DESC
+        LIMIT 96
+        """
+    ).fetchall()
+    if not sphere_rows:
+        return []
+
+    rows_by_id = {row["sphere_id"]: row for row in sphere_rows}
+    scored_spheres: list[tuple[sqlite3.Row, float]] = []
+    for row in sphere_rows:
+        score = sphere_query_score(row, query_vector, query_tokens)
+        if score > 0:
+            scored_spheres.append((row, score))
+
+    candidates: dict[str, float] = {}
+    direct_spheres = sorted(scored_spheres, key=lambda item: item[1], reverse=True)[: max(3, min(limit, 10))]
+    for row, score in direct_spheres:
+        add_sphere_support(candidates, row, score, support_limit=10)
+        neighbors = conn.execute(
+            """
+            SELECT neighbor_sphere_id, ring, similarity
+            FROM sphere_neighbors
+            WHERE sphere_id = ? AND index_version = ?
+            ORDER BY ring ASC, rank ASC
+            LIMIT ?
+            """,
+            (
+                row["sphere_id"],
+                BIORAG_INDEX_VERSION,
+                6 * sum(range(1, SPHERE_HONEYCOMB_RINGS + 1)),
+            ),
+        ).fetchall()
+        for neighbor in neighbors:
+            neighbor_row = rows_by_id.get(neighbor["neighbor_sphere_id"])
+            if neighbor_row is None:
+                continue
+            ring = int(neighbor["ring"] or 1)
+            chain_score = score * float(neighbor["similarity"] or 0.0) * (0.58 ** ring)
+            if chain_score <= 0.012:
+                continue
+            add_sphere_support(
+                candidates,
+                neighbor_row,
+                chain_score,
+                support_limit=max(3, 8 - ring * 2),
+            )
+    return sorted(candidates.items(), key=lambda item: item[1], reverse=True)[:limit]
+
+
+def sphere_query_score(row: sqlite3.Row, query_vector: dict[int, float], query_tokens: list[str]) -> float:
+    terms = " ".join(json_list(row["topic_terms_json"]))
+    center = load_vector(row["centroid_vector_json"])
+    query_distance = vector_distance(query_vector, center)
+    radius = float(row["radius"] or 0.0)
+    shell_std = max(float(row["shell_std"] or 0.0), 0.04)
+    shell_alignment = math.exp(-abs(query_distance - radius) / shell_std) if radius else 0.0
+    return (
+        cosine(query_vector, center) * 0.64
+        + lexical_overlap(query_tokens, f"{row['summary_text']} {terms}") * 0.22
+        + shell_alignment * 0.08
+        + min(float(row["density"] or 0.0), 1.0) * 0.025
+        + min(float(row["strength"] or 1.0), 3.0) * 0.015
+    )
+
+
+def add_sphere_support(
+    candidates: dict[str, float],
+    row: sqlite3.Row,
+    score: float,
+    *,
+    support_limit: int,
+) -> None:
+    for index, chunk_id in enumerate(json_list(row["support_chunk_ids_json"])[:support_limit]):
+        candidates[chunk_id] = max(
+            candidates.get(chunk_id, 0.0),
+            score / (index + 1),
         )
-        if score <= 0:
-            continue
-        for index, chunk_id in enumerate(json_list(row["support_chunk_ids_json"])[:10]):
-            candidates.append((chunk_id, score / (index + 1)))
-    return sorted(candidates, key=lambda item: item[1], reverse=True)[:limit]
 
 
 def tree_route(
@@ -694,6 +896,13 @@ def hex_expand(
     scores: dict[str, float] = {}
     for chunk_id, seed_score in seeds[:frontier]:
         scores[chunk_id] = max(scores.get(chunk_id, 0.0), seed_score)
+        for candidate_id, ring in hex_cell_ring_candidates(conn, chunk_id, max_ring=HEX_EXPANSION_RINGS):
+            if candidate_id == chunk_id:
+                continue
+            scores[candidate_id] = max(
+                scores.get(candidate_id, 0.0),
+                seed_score * hex_ring_weight(ring),
+            )
         rows = conn.execute(
             """
             SELECT neighbor_id, similarity
@@ -710,6 +919,67 @@ def hex_expand(
                 seed_score * float(row["similarity"]) * 0.72,
             )
     return sorted(scores.items(), key=lambda item: item[1], reverse=True)[:limit]
+
+
+def hex_cell_ring_candidates(
+    conn: sqlite3.Connection,
+    chunk_id: str,
+    *,
+    max_ring: int,
+    max_candidates: int = 36,
+) -> list[tuple[str, int]]:
+    assignment = conn.execute(
+        """
+        SELECT q, r
+        FROM biorag_chunk_cells
+        WHERE chunk_id = ? AND index_version = ?
+        """,
+        (chunk_id, BIORAG_INDEX_VERSION),
+    ).fetchone()
+    if assignment is None:
+        return []
+
+    seen: set[str] = {chunk_id}
+    candidates: list[tuple[str, int]] = []
+    for cell_q, cell_r, ring in hex_coords_within_radius(int(assignment["q"]), int(assignment["r"]), max_ring):
+        row = conn.execute(
+            """
+            SELECT chunk_ids_json
+            FROM biorag_hex_cells
+            WHERE q = ? AND r = ? AND index_version = ?
+            """,
+            (cell_q, cell_r, BIORAG_INDEX_VERSION),
+        ).fetchone()
+        if row is None:
+            continue
+        for candidate_id in json_list(row["chunk_ids_json"]):
+            if candidate_id in seen:
+                continue
+            seen.add(candidate_id)
+            candidates.append((candidate_id, ring))
+            if len(candidates) >= max_candidates:
+                return candidates
+    return candidates
+
+
+def hex_coords_within_radius(q: int, r: int, radius: int) -> list[tuple[int, int, int]]:
+    coords: list[tuple[int, int, int]] = []
+    for dq in range(-radius, radius + 1):
+        min_dr = max(-radius, -dq - radius)
+        max_dr = min(radius, -dq + radius)
+        for dr in range(min_dr, max_dr + 1):
+            cell_q = q + dq
+            cell_r = r + dr
+            coords.append((cell_q, cell_r, hex_distance(q, r, cell_q, cell_r)))
+    return sorted(coords, key=lambda item: (item[2], item[0], item[1]))
+
+
+def hex_ring_weight(ring: int) -> float:
+    if ring <= 0:
+        return 0.5
+    if ring == 1:
+        return 0.32
+    return max(0.08, 0.2 * (0.64 ** (ring - 2)))
 
 
 def propagate_web_signal(
@@ -730,12 +1000,14 @@ def propagate_web_signal(
         if not frontier:
             break
         adjacency: dict[str, list[tuple[str, float]]] = defaultdict(list)
-        for link in iter_links_for_chunks(conn, frontier.keys()):
+        links = iter_links_for_chunks(conn, frontier.keys())
+        adaptive_weights = edge_weights_for_links(conn, links)
+        for link in links:
             source = link["source_chunk_id"]
             target = link["target_chunk_id"]
             link_type = str(link["link_type"] or "web")
             confidence = max(float(link["confidence_score"] or 0.0), 0.08)
-            adaptive = edge_weight(conn, source, target, link_type)
+            adaptive = adaptive_weights.get(stable_edge_key(source, target, link_type), 1.0)
             weight = confidence * adaptive
             adjacency[source].append((target, weight))
             adjacency[target].append((source, weight))
@@ -761,6 +1033,39 @@ def propagate_web_signal(
         if len(signal) >= max_candidates:
             break
     return sorted(signal.items(), key=lambda item: item[1], reverse=True)[:max_candidates]
+
+
+def edge_weights_for_links(conn: sqlite3.Connection, links: list[sqlite3.Row]) -> dict[str, float]:
+    edge_keys = sorted(
+        {
+            stable_edge_key(link["source_chunk_id"], link["target_chunk_id"], str(link["link_type"] or "web"))
+            for link in links
+        }
+    )
+    if not edge_keys:
+        return {}
+
+    weights: dict[str, float] = {}
+    for batch in chunked_items(edge_keys):
+        placeholders = ",".join("?" for _ in batch)
+        rows = conn.execute(
+            f"""
+            SELECT edge_key, weight, last_decayed_at
+            FROM biorag_edge_weights
+            WHERE edge_key IN ({placeholders})
+            """,
+            batch,
+        ).fetchall()
+        for row in rows:
+            weights[row["edge_key"]] = decayed_weight(
+                float(row["weight"] or 1.0),
+                str(row["last_decayed_at"] or utc_now()),
+            )
+    return weights
+
+
+def chunked_items(items: list[str], size: int = 500) -> list[list[str]]:
+    return [items[index : index + size] for index in range(0, len(items), size)]
 
 
 def edge_weight(conn: sqlite3.Connection, source_id: str, target_id: str, edge_type: str) -> float:

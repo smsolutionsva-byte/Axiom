@@ -6,6 +6,7 @@ import unittest
 import base64
 import os
 import json
+import math
 from pathlib import Path
 
 from axiom.answering import answer_query
@@ -14,7 +15,15 @@ from axiom.biorag import biorag_search, biorag_status, energy_budget
 from axiom.citation import validate_citations
 from axiom.database import connect
 from axiom.dependencies import audit_dependencies, dependency_by_key
-from axiom.evaluation import BenchmarkCase, run_benchmark, term_supported
+from axiom.evaluation import (
+    BenchmarkCase,
+    CaseResult,
+    evaluator_framework_summary,
+    official_metric_or_fallback,
+    run_benchmark,
+    summarize_results,
+    term_supported,
+)
 from axiom.extractors import extract_docx_xml, extract_segments, file_type_for
 from axiom.image_generation import ImageGenerationRequest, generate_image, image_generation_status
 from axiom.ingestion import ingest_path
@@ -185,6 +194,38 @@ class AxiomCoreTests(unittest.TestCase):
         self.assertTrue(term_supported("voice recordings", haystack))
         self.assertTrue(term_supported("screenshot review", haystack))
         self.assertTrue(term_supported("field report", "Field dashboard evidence appears in the final report."))
+
+    def test_evaluator_sanitizes_nan_official_scores(self) -> None:
+        value, used_fallback = official_metric_or_fallback({"faithfulness": math.nan}, "faithfulness", 0.875)
+        self.assertEqual(value, 0.875)
+        self.assertTrue(used_fallback)
+
+        rows = [
+            CaseResult(
+                case_id="nan-case",
+                mode="hiverag",
+                latency_ms=10.0,
+                hit_at_k=1.0,
+                mrr=1.0,
+                source_recall=1.0,
+                term_recall=1.0,
+                evidence_count=1,
+                matched_sources=["a.txt"],
+                matched_terms=["alpha"],
+                returned_sources=["a.txt"],
+                returned_contexts=["alpha"],
+                context_precision_proxy=math.nan,
+                context_recall_proxy=1.0,
+                faithfulness_proxy=0.875,
+                answer_relevancy_proxy=0.75,
+            )
+        ]
+
+        summary = summarize_results(rows)
+        framework = evaluator_framework_summary(rows)
+        self.assertEqual(summary["hiverag"]["ragas_context_precision_proxy"], 0.0)
+        self.assertEqual(summary["hiverag"]["ragas_faithfulness_proxy"], 0.875)
+        self.assertFalse(math.isnan(framework["ragas"]["hiverag"]["overall_proxy"]))
 
     def test_large_benchmark_builder_exports_axiom_and_ragas_shapes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
