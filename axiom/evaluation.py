@@ -347,7 +347,7 @@ def apply_official_ragas(
         print(f"Running actual Ragas evaluation for {mode} mode with {evaluator} (model={evaluator_model or 'default'})...")
         try:
             from ragas.run_config import RunConfig
-            run_config = RunConfig(timeout=300, max_retries=5, max_workers=2)
+            run_config = RunConfig(timeout=900, max_retries=5, max_workers=1)
             eval_result = evaluate(
                 dataset, 
                 metrics=metrics, 
