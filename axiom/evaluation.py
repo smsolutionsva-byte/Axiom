@@ -92,14 +92,21 @@ def run_benchmark(
             latency_ms = (time.perf_counter() - start) * 1000.0
             results.append(score_case(case, mode, hits, latency_ms=latency_ms))
             
+    evaluator_status = {
+        "requested": evaluator,
+        "model": evaluator_model,
+        "ragas_llm_judge_used": False,
+        "fallback_metric_cells": 0,
+    }
     if evaluator in ("ollama", "openai"):
-        results = apply_official_ragas(cases, results, evaluator, evaluator_model)
+        results, evaluator_status = apply_official_ragas(cases, results, evaluator, evaluator_model)
         
     return {
         "cases": [case.__dict__ for case in cases],
         "results": [result.__dict__ for result in results],
         "summary": summarize_results(results),
         "evaluator_availability": evaluator_availability(),
+        "evaluator_status": evaluator_status,
         "framework_summary": evaluator_framework_summary(results),
     }
 
@@ -195,7 +202,11 @@ def first_relevant_rank(case: BenchmarkCase, hits: list[SearchHit]) -> int | Non
         haystack = f"{hit.file_name}\n{hit.file_path}\n{evaluation_context(hit)}".lower()
         source_match = any(expected in hit.file_name.lower() or expected in hit.file_path.lower() for expected in case.expected_sources)
         term_match = any(term_supported(term, haystack) for term in case.expected_terms)
-        if source_match or term_match:
+        if case.expected_sources:
+            if source_match:
+                return rank
+            continue
+        if term_match:
             return rank
     return None
 
@@ -276,7 +287,18 @@ def is_finite_number(value: object) -> bool:
         return False
 
 
-def apply_official_ragas(cases: list[BenchmarkCase], results: list[CaseResult], evaluator: str, evaluator_model: str | None) -> list[CaseResult]:
+def apply_official_ragas(
+    cases: list[BenchmarkCase],
+    results: list[CaseResult],
+    evaluator: str,
+    evaluator_model: str | None,
+) -> tuple[list[CaseResult], dict[str, object]]:
+    status: dict[str, object] = {
+        "requested": evaluator,
+        "model": evaluator_model,
+        "ragas_llm_judge_used": False,
+        "fallback_metric_cells": 0,
+    }
     try:
         import sys, types
         m = types.ModuleType('langchain_community.chat_models.vertexai')
@@ -301,7 +323,8 @@ def apply_official_ragas(cases: list[BenchmarkCase], results: list[CaseResult], 
             
     except ImportError as e:
         print(f"Warning: Could not import required eval libraries. Install with pip install -e .[eval] langchain langchain-community. Error: {e}")
-        return results
+        status["error"] = str(e)
+        return results, status
 
     grouped = {}
     for res in results:
@@ -366,6 +389,8 @@ def apply_official_ragas(cases: list[BenchmarkCase], results: list[CaseResult], 
                     answer_relevancy_proxy=answer_relevancy_value,
                 )
                 updated_results.append(new_res)
+            status["ragas_llm_judge_used"] = True
+            status["fallback_metric_cells"] = int(status["fallback_metric_cells"]) + fallback_count
             if fallback_count:
                 print(
                     f"Ragas returned {fallback_count} invalid metric value(s) for {mode}; "
@@ -373,9 +398,10 @@ def apply_official_ragas(cases: list[BenchmarkCase], results: list[CaseResult], 
                 )
         except Exception as e:
             print(f"Ragas evaluation failed: {e}")
+            status["error"] = str(e)
             updated_results.extend(mode_results)
             
-    return updated_results
+    return updated_results, status
 
 
 def official_metric_or_fallback(row: object, metric: str, fallback: float) -> tuple[float, bool]:
@@ -477,8 +503,79 @@ def term_supported(term: str, haystack: str) -> bool:
 def evaluation_answer(question: str, contexts: list[str]) -> str:
     if not contexts:
         return "I do not know based on the retrieved context."
-    excerpt = compact_context(contexts[0], limit=520)
-    return f"The retrieved evidence for '{question}' is grounded in the top context: {excerpt}"
+    combined = "\n".join(contexts)
+    sources = context_sources(contexts)
+    supported_terms = [
+        term
+        for term in evaluation_query_terms(question)
+        if term_supported(term, combined)
+    ]
+    excerpts = relevant_context_excerpts(contexts, supported_terms, limit=2)
+    parts: list[str] = []
+    if sources:
+        parts.append(f"Retrieved source evidence includes {', '.join(sources[:3])}.")
+    if supported_terms:
+        parts.append(f"Supported details present in the retrieved evidence: {', '.join(supported_terms[:10])}.")
+    if excerpts:
+        parts.append("Evidence excerpts: " + " | ".join(excerpts))
+    if not parts:
+        return compact_context(contexts[0], limit=520)
+    return " ".join(parts)
+
+
+def context_sources(contexts: list[str]) -> list[str]:
+    sources: list[str] = []
+    for context in contexts:
+        for line in context.splitlines():
+            if not line.startswith("Source:"):
+                continue
+            source = line.split(":", 1)[1].strip()
+            if source and source not in sources:
+                sources.append(source)
+            break
+    return sources
+
+
+def evaluation_query_terms(question: str) -> list[str]:
+    terms: list[str] = []
+    seen: set[str] = set()
+    for token in tokenize(question):
+        normalized = normalize_token(token)
+        if len(normalized) < 4 or normalized in EVALUATION_ANSWER_STOP_TERMS:
+            continue
+        if normalized not in seen:
+            seen.add(normalized)
+            terms.append(normalized)
+    return terms
+
+
+def relevant_context_excerpts(contexts: list[str], supported_terms: list[str], *, limit: int) -> list[str]:
+    scored: list[tuple[int, str]] = []
+    for context in contexts:
+        compact = compact_context(context, limit=420)
+        score = sum(1 for term in supported_terms if term_supported(term, compact))
+        scored.append((score, compact))
+    return [
+        excerpt
+        for score, excerpt in sorted(scored, key=lambda item: item[0], reverse=True)[:limit]
+        if score > 0 or not supported_terms
+    ]
+
+
+EVALUATION_ANSWER_STOP_TERMS = {
+    "about",
+    "answer",
+    "based",
+    "connect",
+    "discuss",
+    "evidence",
+    "record",
+    "records",
+    "retrieved",
+    "source",
+    "sources",
+    "which",
+}
 
 
 def ground_truth_for_case(case: BenchmarkCase) -> str:
@@ -546,17 +643,22 @@ def markdown_report(report: dict[str, object]) -> str:
     summary = report.get("summary", {})
     results = report.get("results", [])
     availability = report.get("evaluator_availability", {})
+    evaluator_status = report.get("evaluator_status", {})
     framework_summary = report.get("framework_summary", {})
+    ragas_judge_used = isinstance(evaluator_status, dict) and bool(evaluator_status.get("ragas_llm_judge_used"))
+    ragas_label = "RAGAS LLM Judge Summary" if ragas_judge_used else "RAGAS Proxy Summary"
+    ragas_metric_label = "Context Precision" if ragas_judge_used else "Context Precision Proxy"
+    faithfulness_label = "Faithfulness" if ragas_judge_used else "Faithfulness Proxy"
     lines = [
         "# HiveRAG Benchmark Results",
         "",
         "These numbers are generated by the local Axiom benchmark harness. Treat small local runs as smoke-test evidence, not publication-grade final results.",
         "",
-        "Official RAGAS, TruLens, and DeepEval package runs require their optional dependencies and an evaluator LLM. When those packages are unavailable, this report records deterministic offline proxy metrics mapped to the same metric families.",
+        "Official RAGAS package runs require optional dependencies and an evaluator LLM. When no RAGAS evaluator is requested or available, this report records deterministic offline proxy metrics mapped to the same metric families. TruLens and DeepEval sections are proxy crosswalks unless those frameworks are run directly.",
         "",
         "## Summary",
         "",
-        "| Mode | Hit@k | MRR | Source Recall | Term Recall | Context Precision Proxy | Faithfulness Proxy | Avg Latency ms |",
+        f"| Mode | Hit@k | MRR | Source Recall | Term Recall | {ragas_metric_label} | {faithfulness_label} | Avg Latency ms |",
         "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     if isinstance(summary, dict):
@@ -578,12 +680,26 @@ def markdown_report(report: dict[str, object]) -> str:
             lines.append(
                 f"| {framework} | {info.get('official_available', False)} | {info.get('local_track', 'offline proxy')} | {metrics} |"
             )
+    if isinstance(evaluator_status, dict) and evaluator_status.get("requested"):
+        lines.extend(
+            [
+                "",
+                "## Evaluator Run",
+                "",
+                f"- Requested evaluator: {evaluator_status.get('requested')}",
+                f"- Model: {evaluator_status.get('model') or 'default'}",
+                f"- RAGAS LLM judge used: {bool(evaluator_status.get('ragas_llm_judge_used'))}",
+                f"- Fallback metric cells: {evaluator_status.get('fallback_metric_cells', 0)}",
+            ]
+        )
+        if evaluator_status.get("error"):
+            lines.append(f"- Evaluator error: {evaluator_status.get('error')}")
     if isinstance(framework_summary, dict):
         ragas = framework_summary.get("ragas", {})
         lines.extend(
             [
                 "",
-                "## RAGAS Proxy Summary",
+                f"## {ragas_label}",
                 "",
                 "| Mode | Context Precision | Context Recall | Faithfulness | Answer Relevancy | Overall |",
                 "| --- | ---: | ---: | ---: | ---: | ---: |",
@@ -598,7 +714,7 @@ def markdown_report(report: dict[str, object]) -> str:
         lines.extend(
             [
                 "",
-                "## TruLens Proxy Summary",
+                "## TruLens Proxy Crosswalk Summary",
                 "",
                 "| Mode | Context Relevance | Groundedness | Answer Relevance | RAG Triad |",
                 "| --- | ---: | ---: | ---: | ---: |",
@@ -613,7 +729,7 @@ def markdown_report(report: dict[str, object]) -> str:
         lines.extend(
             [
                 "",
-                "## DeepEval Proxy Summary",
+                "## DeepEval Proxy Crosswalk Summary",
                 "",
                 "| Mode | Contextual Precision | Contextual Recall | Contextual Relevancy | Faithfulness | Answer Relevancy | Overall |",
                 "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",

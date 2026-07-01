@@ -349,19 +349,29 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(f"Benchmark cases: {len(cases)}")
             print(f"Modes: {', '.join(modes)}")
+            evaluator_status = result.get("evaluator_status", {})
+            ragas_judge_used = isinstance(evaluator_status, dict) and bool(evaluator_status.get("ragas_llm_judge_used"))
+            context_label = "ContextPrecision" if ragas_judge_used else "ContextPrecisionProxy"
+            faithfulness_label = "Faithfulness" if ragas_judge_used else "FaithfulnessProxy"
             print("\nSummary:")
             for mode, metrics in result["summary"].items():
                 print(
                     f"- {mode}: Hit@k={metrics['hit_at_k']} MRR={metrics['mrr']} "
                     f"SourceRecall={metrics['source_recall']} TermRecall={metrics['term_recall']} "
-                    f"ContextPrecisionProxy={metrics['ragas_context_precision_proxy']} "
-                    f"FaithfulnessProxy={metrics['ragas_faithfulness_proxy']} "
+                    f"{context_label}={metrics['ragas_context_precision_proxy']} "
+                    f"{faithfulness_label}={metrics['ragas_faithfulness_proxy']} "
                     f"Latency={metrics['avg_latency_ms']}ms"
                 )
             print("\nEvaluator tracks:")
             for framework, info in result["evaluator_availability"].items():
                 state = "official package ready" if info["official_available"] else "offline proxy only"
                 print(f"- {framework}: {state}")
+            if ragas_judge_used:
+                print(
+                    f"- ragas run: LLM judge used "
+                    f"(model={evaluator_status.get('model') or args.evaluator_model or 'default'}, "
+                    f"fallback metric cells={evaluator_status.get('fallback_metric_cells', 0)})"
+                )
             framework_summary = result["framework_summary"]
             if "hiverag" in framework_summary["ragas"]:
                 ragas = framework_summary["ragas"]["hiverag"]

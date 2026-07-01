@@ -177,6 +177,7 @@ def coverage_select(
         search_text = evidence_search_text(chunk)
         overlap = lexical_overlap(query_tokens, search_text)
         identifier_overlap = exact_identifier_overlap(query_tokens, search_text)
+        role_overlap = evidence_role_overlap(query_tokens, chunk)
         novelty = 0.0
         if chunk["file_id"] not in seen_files:
             novelty += 0.018
@@ -189,7 +190,13 @@ def coverage_select(
         pool.append(
             (
                 chunk_id,
-                base_score + overlap * 0.085 + identifier_overlap * 0.11 + novelty - redundancy * 0.025 - risk,
+                base_score
+                + overlap * 0.085
+                + identifier_overlap * 0.18
+                + role_overlap * 0.08
+                + novelty
+                - redundancy * 0.025
+                - risk,
                 chunk,
                 overlap,
                 identifier_overlap,
@@ -220,6 +227,59 @@ def exact_identifier_overlap(query_tokens: list[str], text: str) -> float:
         return 0.0
     text_tokens = set(tokenize(text))
     return len(identifiers & text_tokens) / max(len(identifiers), 1)
+
+
+def evidence_role_overlap(query_tokens: list[str], row: sqlite3.Row) -> float:
+    requested_roles = requested_evidence_roles(query_tokens)
+    if not requested_roles:
+        return 0.0
+    file_name = str(row["file_name"] or "")
+    file_type = str(row["file_type"] or "")
+    modality = str(row["modality"] or "")
+    chunk_roles = evidence_roles_for_source(file_name=file_name, file_type=file_type, modality=modality)
+    return len(requested_roles & chunk_roles) / len(requested_roles)
+
+
+def requested_evidence_roles(query_tokens: list[str]) -> set[str]:
+    tokens = set(query_tokens)
+    roles: set[str] = set()
+    if tokens & {"dashboard", "ocr", "screenshot", "visual", "image", "panel"}:
+        roles.add("dashboard")
+    if tokens & {"transcript", "operator", "voice", "audio", "call"}:
+        roles.add("transcript")
+    if "briefing" in tokens:
+        roles.add("briefing")
+    if "annex" in tokens:
+        roles.add("annex_report")
+    if "field" in tokens and "note" in tokens:
+        roles.add("field_note")
+    if "audit" in tokens and "log" in tokens:
+        roles.add("audit_log")
+    if tokens & {"pdf", "document"}:
+        roles.add("document")
+    return roles
+
+
+def evidence_roles_for_source(*, file_name: str, file_type: str, modality: str) -> set[str]:
+    lowered_name = file_name.lower()
+    lowered_type = file_type.lower()
+    lowered_modality = modality.lower()
+    roles: set[str] = set()
+    if "dashboard" in lowered_name or "ocr" in lowered_name or lowered_modality == "ocr":
+        roles.add("dashboard")
+    if "operator" in lowered_name or "transcript" in lowered_name or lowered_modality == "transcript":
+        roles.add("transcript")
+    if "briefing" in lowered_name:
+        roles.add("briefing")
+    if "annex_report" in lowered_name or "annex-report" in lowered_name or lowered_type == "pdf":
+        roles.add("annex_report")
+    if "field_note" in lowered_name or "field-note" in lowered_name:
+        roles.add("field_note")
+    if "audit_log" in lowered_name or "audit-log" in lowered_name:
+        roles.add("audit_log")
+    if lowered_type in {"doc", "docx", "pdf"}:
+        roles.add("document")
+    return roles
 
 
 def chunk_redundancy(left: sqlite3.Row, right: sqlite3.Row) -> float:
@@ -258,7 +318,8 @@ def evidence_search_text(row: sqlite3.Row) -> str:
     file_name = str(row["file_name"] or "")
     file_type = str(row["file_type"] or "")
     modality = str(row["modality"] or "")
-    labels = [file_name, file_type, modality, row["text_content"]]
+    file_name_terms = file_name.replace("_", " ").replace("-", " ").replace(".", " ")
+    labels = [file_name, file_name_terms, file_type, modality, row["text_content"]]
     labels.append(evidence_kind_terms(file_name=file_name, file_type=file_type, modality=modality))
     return " ".join(str(part) for part in labels if part)
 
@@ -276,6 +337,18 @@ def evidence_kind_terms(*, file_name: str, file_type: str, modality: str) -> str
         terms.append("document brief notes")
     if lowered_type == "pdf":
         terms.append("pdf annexure report")
+    if "dashboard" in lowered_name or "ocr" in lowered_name:
+        terms.append("dashboard ocr screenshot visual panel")
+    if "operator" in lowered_name or "transcript" in lowered_name:
+        terms.append("operator transcript voice call")
+    if "briefing" in lowered_name:
+        terms.append("briefing source summary")
+    if "field_note" in lowered_name or "field-note" in lowered_name:
+        terms.append("field note observation")
+    if "audit_log" in lowered_name or "audit-log" in lowered_name:
+        terms.append("audit log event trail")
+    if "annex_report" in lowered_name or "annex-report" in lowered_name:
+        terms.append("annex report formal source")
     if "screen" in lowered_name or "screenshot" in lowered_name:
         terms.append("screenshot")
     if "voice" in lowered_name or "call" in lowered_name:
