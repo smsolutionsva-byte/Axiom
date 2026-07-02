@@ -36,6 +36,7 @@ class BenchmarkCase:
     expected_sources: list[str] = field(default_factory=list)
     expected_terms: list[str] = field(default_factory=list)
     notes: str = ""
+    reference: str = ""
 
 
 @dataclass(frozen=True)
@@ -73,6 +74,7 @@ def load_benchmark_cases(path: str | Path) -> list[BenchmarkCase]:
                     expected_sources=[str(item).lower() for item in data.get("expected_sources", [])],
                     expected_terms=[str(item).lower() for item in data.get("expected_terms", [])],
                     notes=str(data.get("notes", "")),
+                    reference=str(data.get("reference", "")),
                 )
             )
     return cases
@@ -86,10 +88,22 @@ def run_benchmark(
     top_k: int = 5,
     evaluator: str | None = None,
     evaluator_model: str | None = None,
+    progress: bool = False,
 ) -> dict[str, object]:
     results: list[CaseResult] = []
-    for case in cases:
+    total_runs = len(cases) * len(modes)
+    if progress:
+        print(f"Evaluating {len(cases)} case(s) across {len(modes)} mode(s): {total_runs} retrieval run(s).", flush=True)
+    completed = 0
+    for case_index, case in enumerate(cases, start=1):
         for mode in modes:
+            completed += 1
+            if progress:
+                print(
+                    f"Evaluating {completed}/{total_runs}: case={case.case_id} "
+                    f"({case_index}/{len(cases)}), mode={mode}",
+                    flush=True,
+                )
             start = time.perf_counter()
             hits = retrieve_for_mode(conn, case.question, mode=mode, top_k=top_k)
             latency_ms = (time.perf_counter() - start) * 1000.0
@@ -422,7 +436,11 @@ def apply_official_ragas(
         dataset = EvaluationDataset(samples=samples, name=f"axiom-{mode}")
         metrics = [context_precision, context_recall, faithfulness, answer_relevancy]
         
-        print(f"Running actual Ragas evaluation for {mode} mode with {evaluator} (model={evaluator_model or 'default'})...")
+        print(
+            f"Running actual Ragas evaluation for {mode} mode with {evaluator} "
+            f"(model={evaluator_model or 'default'})...",
+            flush=True,
+        )
         try:
             from ragas.run_config import RunConfig
             run_config = RunConfig(
@@ -661,6 +679,8 @@ EVALUATION_ANSWER_STOP_TERMS = {
 
 
 def ground_truth_for_case(case: BenchmarkCase) -> str:
+    if case.reference.strip():
+        return case.reference.strip()
     parts = []
     if case.expected_sources:
         parts.append(f"Expected source evidence: {', '.join(case.expected_sources)}.")

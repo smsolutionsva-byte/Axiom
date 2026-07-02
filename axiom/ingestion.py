@@ -36,25 +36,56 @@ def iter_input_files(path: Path) -> list[Path]:
     return sorted(item for item in path.rglob("*") if item.is_file())
 
 
-def ingest_path(conn: sqlite3.Connection, path: str | Path, *, build_links: bool = True) -> IngestReport:
+def ingest_path(
+    conn: sqlite3.Connection,
+    path: str | Path,
+    *,
+    build_links: bool = True,
+    link_strategy: str = "incremental",
+    build_biorag_index: bool = True,
+    progress: bool = False,
+    progress_every: int = 250,
+) -> IngestReport:
     root = Path(path)
+    if link_strategy not in {"incremental", "batch"}:
+        raise ValueError(f"Unknown link strategy: {link_strategy}")
     report = IngestReport()
     indexed_child_ids: list[str] = []
+    files = iter_input_files(root)
 
-    for file_path in iter_input_files(root):
+    if progress:
+        print(f"Found {len(files)} input file(s) under {root}.", flush=True)
+
+    for file_index, file_path in enumerate(files, start=1):
         if is_sidecar(file_path):
             continue
         if file_type_for(file_path) == "unsupported":
             report.skipped_files.append(str(file_path))
             continue
         new_child_ids = ingest_file(conn, file_path, report)
-        if build_links and new_child_ids:
+        indexed_child_ids.extend(new_child_ids)
+        if build_links and link_strategy == "incremental" and new_child_ids:
             report.links_created += build_cross_modal_links(conn, new_child_ids)
             report.links_created += build_spider_links(conn, new_child_ids)
-            indexed_child_ids.extend(new_child_ids)
+        if progress and (file_index == 1 or file_index % progress_every == 0 or file_index == len(files)):
+            print(
+                f"Indexed {file_index}/{len(files)} file(s): "
+                f"{report.chunks_created} chunk(s), {report.links_created} link(s).",
+                flush=True,
+            )
 
     if build_links and indexed_child_ids:
-        report.links_created += refresh_biorag_index(conn, indexed_child_ids)
+        if link_strategy == "batch":
+            if progress:
+                print(f"Building retrieval links for {len(indexed_child_ids)} chunk(s)...", flush=True)
+            report.links_created += build_cross_modal_links(conn, indexed_child_ids)
+            report.links_created += build_spider_links(conn, indexed_child_ids)
+            if progress:
+                print(f"Built {report.links_created} retrieval link(s).", flush=True)
+        if build_biorag_index:
+            if progress:
+                print("Building HiveRAG index layers...", flush=True)
+            report.links_created += refresh_biorag_index(conn, indexed_child_ids)
 
     conn.commit()
     return report
@@ -158,6 +189,8 @@ def build_cross_modal_links(
     max_links: int = 200,
 ) -> int:
     all_rows = list(iter_child_vectors(conn))
+    if len({row["modality"] for row in all_rows}) < 2:
+        return 0
     rows_by_id = {row["chunk_id"]: row for row in all_rows}
     new_rows = [rows_by_id[chunk_id] for chunk_id in new_child_ids if chunk_id in rows_by_id]
     links = 0

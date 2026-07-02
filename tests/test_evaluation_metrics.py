@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import json
 import os
+import tempfile
 import unittest
 import urllib.error
+from pathlib import Path
 from unittest.mock import patch
 
 from axiom.evaluation import (
     BenchmarkCase,
     CaseResult,
+    load_benchmark_cases,
     markdown_report,
     ollama_base_url,
     preflight_ollama,
@@ -15,6 +19,7 @@ from axiom.evaluation import (
     score_case,
 )
 from axiom.retrieval import SearchHit
+from tools.build_beir_benchmark import safe_doc_filename
 
 
 def hit(file_name: str, text: str) -> SearchHit:
@@ -89,6 +94,59 @@ class EvaluationMetricTests(unittest.TestCase):
         self.assertIn("kaveri-14", response)
         self.assertNotIn("drip irrigation", response)
 
+    def test_loader_preserves_beir_reference_for_ragas(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "beir_eval.jsonl"
+            path.write_text(
+                json.dumps(
+                    {
+                        "id": "beir-1",
+                        "question": "What evidence supports the trial result?",
+                        "expected_sources": ["doc__abc.txt"],
+                        "reference": "Gold BEIR document text with the trial result.",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            case = load_benchmark_cases(path)[0]
+
+        self.assertEqual(case.reference, "Gold BEIR document text with the trial result.")
+        payload = ragas_sample_payload(
+            case,
+            CaseResult(
+                case_id=case.case_id,
+                mode="hiverag",
+                latency_ms=1.0,
+                hit_at_k=1.0,
+                mrr=1.0,
+                source_recall=1.0,
+                term_recall=0.0,
+                evidence_count=1,
+                matched_sources=["doc__abc.txt"],
+                matched_terms=[],
+                returned_sources=["doc__abc.txt"],
+                returned_contexts=["Source: doc__abc.txt\nText: Retrieved trial result."],
+                context_precision_proxy=1.0,
+                context_recall_proxy=1.0,
+                faithfulness_proxy=1.0,
+                answer_relevancy_proxy=1.0,
+            ),
+        )
+        self.assertEqual(payload["reference"], case.reference)
+        self.assertEqual(payload["reference_contexts"], [case.reference])
+
+    def test_beir_doc_ids_become_safe_unique_filenames(self) -> None:
+        url_name = safe_doc_filename("https://example.org/papers/a/b?x=1")
+        similar_name = safe_doc_filename("https_example.org_papers_a_b_x_1")
+
+        self.assertTrue(url_name.endswith(".txt"))
+        self.assertNotIn("/", url_name)
+        self.assertNotIn("\\", url_name)
+        self.assertNotIn(":", url_name)
+        self.assertNotEqual(url_name, similar_name)
+
     def test_markdown_labels_actual_ragas_judge_separately_from_crosswalks(self) -> None:
         report = {
             "summary": {},
@@ -106,8 +164,8 @@ class EvaluationMetricTests(unittest.TestCase):
         markdown = markdown_report(report)
 
         self.assertIn("RAGAS LLM Judge Summary", markdown)
-        self.assertIn("TruLens Proxy Crosswalk Summary", markdown)
-        self.assertIn("DeepEval Proxy Crosswalk Summary", markdown)
+        self.assertIn("TruLens LLM Judge Crosswalk Summary", markdown)
+        self.assertIn("DeepEval LLM Judge Crosswalk Summary", markdown)
 
     def test_ollama_base_url_normalizes_api_paths(self) -> None:
         with patch.dict(os.environ, {"AXIOM_OLLAMA_BASE_URL": "http://127.0.0.1:11434/api/chat"}, clear=False):

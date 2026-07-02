@@ -333,14 +333,38 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.root_command == "benchmark":
-        if args.corpus:
-            ingest_path(conn, args.corpus)
         cases = load_benchmark_cases(args.dataset)
         if args.case_offset:
             cases = cases[max(args.case_offset, 0) :]
         if args.case_limit is not None:
             cases = cases[: max(args.case_limit, 0)]
         modes = [item.strip() for item in args.modes.split(",") if item.strip()]
+        normalized_modes = {item.lower() for item in modes}
+        needs_web_links = bool(normalized_modes & {"avtr", "graph", "graphrag-lite", "biorag", "hiverag"})
+        needs_biorag_index = bool(normalized_modes & {"tree", "hex", "biorag", "hiverag"})
+        if args.corpus:
+            if not args.json:
+                print(f"Indexing corpus: {args.corpus}", flush=True)
+            ingest_report = ingest_path(
+                conn,
+                args.corpus,
+                build_links=needs_web_links or needs_biorag_index,
+                link_strategy="batch",
+                build_biorag_index=needs_biorag_index,
+                progress=not args.json,
+            )
+            if not args.json:
+                print(
+                    f"Indexed {len(ingest_report.indexed_files)} file(s), "
+                    f"created {ingest_report.chunks_created} chunk(s), "
+                    f"built {ingest_report.links_created} link(s).",
+                    flush=True,
+                )
+        if not args.json:
+            print(
+                f"Loaded benchmark: {len(cases)} case(s), modes: {', '.join(modes)}, top_k={args.top_k}",
+                flush=True,
+            )
         if args.evaluator_url:
             if args.evaluator == "openai":
                 os.environ["AXIOM_OPENAI_BASE_URL"] = args.evaluator_url
@@ -350,7 +374,8 @@ def main(argv: list[str] | None = None) -> int:
             os.environ["AXIOM_RAGAS_EMBEDDING_MODEL"] = args.embedding_model
         result = run_benchmark(
             conn, cases, modes=modes, top_k=args.top_k,
-            evaluator=args.evaluator, evaluator_model=args.evaluator_model
+            evaluator=args.evaluator, evaluator_model=args.evaluator_model,
+            progress=not args.json,
         )
         paths = write_benchmark_report(result, args.out, label=args.label)
         if args.json:
