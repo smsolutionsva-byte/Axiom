@@ -796,7 +796,7 @@ def markdown_report(report: dict[str, object]) -> str:
         lines.extend(
             [
                 "",
-                "## TruLens Proxy Crosswalk Summary",
+                f"## TruLens {'LLM Judge' if ragas_judge_used else 'Proxy'} Crosswalk Summary",
                 "",
                 "| Mode | Context Relevance | Groundedness | Answer Relevance | RAG Triad |",
                 "| --- | ---: | ---: | ---: | ---: |",
@@ -811,7 +811,7 @@ def markdown_report(report: dict[str, object]) -> str:
         lines.extend(
             [
                 "",
-                "## DeepEval Proxy Crosswalk Summary",
+                f"## DeepEval {'LLM Judge' if ragas_judge_used else 'Proxy'} Crosswalk Summary",
                 "",
                 "| Mode | Contextual Precision | Contextual Recall | Contextual Relevancy | Faithfulness | Answer Relevancy | Overall |",
                 "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
