@@ -181,6 +181,20 @@ def init_db(conn: sqlite3.Connection) -> None:
             FOREIGN KEY(cell_id) REFERENCES biorag_hex_cells(cell_id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS biorag_bees (
+            bee_id TEXT PRIMARY KEY,
+            bee_name TEXT NOT NULL,
+            sphere_id TEXT NOT NULL,
+            key_terms_json TEXT NOT NULL,
+            source_roles_json TEXT NOT NULL,
+            support_chunk_ids_json TEXT NOT NULL,
+            neighbor_bee_ids_json TEXT NOT NULL,
+            index_version TEXT NOT NULL,
+            strength REAL NOT NULL DEFAULT 1.0,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(sphere_id) REFERENCES sphere_summaries(sphere_id) ON DELETE CASCADE
+        );
+
         CREATE TABLE IF NOT EXISTS adaptive_path_stats (
             path_id TEXT PRIMARY KEY,
             layer TEXT NOT NULL,
@@ -249,6 +263,8 @@ def init_db(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_hex_neighbors_neighbor ON hex_neighbors(neighbor_id);
         CREATE INDEX IF NOT EXISTS idx_hex_cells_qr ON biorag_hex_cells(q, r);
         CREATE INDEX IF NOT EXISTS idx_chunk_cells_cell ON biorag_chunk_cells(cell_id);
+        CREATE INDEX IF NOT EXISTS idx_bees_version ON biorag_bees(index_version);
+        CREATE INDEX IF NOT EXISTS idx_bees_sphere ON biorag_bees(sphere_id, index_version);
         CREATE INDEX IF NOT EXISTS idx_edge_weights_source ON biorag_edge_weights(source_id);
         CREATE INDEX IF NOT EXISTS idx_edge_weights_target ON biorag_edge_weights(target_id);
         CREATE INDEX IF NOT EXISTS idx_edge_weights_type ON biorag_edge_weights(edge_type);

@@ -78,6 +78,8 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark.add_argument("--json", action="store_true")
     benchmark.add_argument("--evaluator", default=None, choices=["ollama", "openai"], help="Use official framework evaluator")
     benchmark.add_argument("--evaluator-model", default="qwen2.5:7b", help="Model to use for evaluator")
+    benchmark.add_argument("--evaluator-url", default=None, help="Base URL for the evaluator endpoint")
+    benchmark.add_argument("--embedding-model", default=None, help="Embedding model for RAGAS evaluator")
 
     imagegen = subparsers.add_parser("imagegen", help="Generate images with an offline local image model")
     imagegen.add_argument("--db", default=None, help="SQLite database path")
@@ -339,6 +341,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.case_limit is not None:
             cases = cases[: max(args.case_limit, 0)]
         modes = [item.strip() for item in args.modes.split(",") if item.strip()]
+        if args.evaluator_url:
+            if args.evaluator == "openai":
+                os.environ["AXIOM_OPENAI_BASE_URL"] = args.evaluator_url
+            else:
+                os.environ["AXIOM_OLLAMA_BASE_URL"] = args.evaluator_url
+        if args.embedding_model:
+            os.environ["AXIOM_RAGAS_EMBEDDING_MODEL"] = args.embedding_model
         result = run_benchmark(
             conn, cases, modes=modes, top_k=args.top_k,
             evaluator=args.evaluator, evaluator_model=args.evaluator_model
@@ -372,6 +381,8 @@ def main(argv: list[str] | None = None) -> int:
                     f"(model={evaluator_status.get('model') or args.evaluator_model or 'default'}, "
                     f"fallback metric cells={evaluator_status.get('fallback_metric_cells', 0)})"
                 )
+            elif isinstance(evaluator_status, dict) and evaluator_status.get("requested") and evaluator_status.get("error"):
+                print(f"- ragas run skipped: {evaluator_status.get('error')}")
             framework_summary = result["framework_summary"]
             if "hiverag" in framework_summary["ragas"]:
                 ragas = framework_summary["ragas"]["hiverag"]

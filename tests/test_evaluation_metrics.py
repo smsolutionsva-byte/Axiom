@@ -1,8 +1,19 @@
 from __future__ import annotations
 
+import os
 import unittest
+import urllib.error
+from unittest.mock import patch
 
-from axiom.evaluation import BenchmarkCase, CaseResult, markdown_report, ragas_sample_payload, score_case
+from axiom.evaluation import (
+    BenchmarkCase,
+    CaseResult,
+    markdown_report,
+    ollama_base_url,
+    preflight_ollama,
+    ragas_sample_payload,
+    score_case,
+)
 from axiom.retrieval import SearchHit
 
 
@@ -97,6 +108,21 @@ class EvaluationMetricTests(unittest.TestCase):
         self.assertIn("RAGAS LLM Judge Summary", markdown)
         self.assertIn("TruLens Proxy Crosswalk Summary", markdown)
         self.assertIn("DeepEval Proxy Crosswalk Summary", markdown)
+
+    def test_ollama_base_url_normalizes_api_paths(self) -> None:
+        with patch.dict(os.environ, {"AXIOM_OLLAMA_BASE_URL": "http://127.0.0.1:11434/api/chat"}, clear=False):
+            self.assertEqual(ollama_base_url(), "http://127.0.0.1:11434")
+
+    def test_ollama_preflight_reports_unreachable_endpoint(self) -> None:
+        with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("no server")):
+            error = preflight_ollama(
+                "http://127.0.0.1:11434",
+                model="llama3",
+                embedding_model="nomic-embed-text",
+            )
+
+        self.assertIsNotNone(error)
+        self.assertIn("Ollama is not reachable", str(error))
 
 
 if __name__ == "__main__":

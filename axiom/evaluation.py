@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 import sqlite3
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from importlib.util import find_spec
 from pathlib import Path
@@ -287,6 +290,61 @@ def is_finite_number(value: object) -> bool:
         return False
 
 
+def ollama_base_url() -> str:
+    configured = os.environ.get("AXIOM_OLLAMA_BASE_URL") or os.environ.get("OLLAMA_HOST")
+    if not configured:
+        configured = os.environ.get("AXIOM_OLLAMA_URL", "")
+    if not configured:
+        return "http://127.0.0.1:11434"
+    normalized = configured.rstrip("/")
+    for suffix in ("/api/generate", "/api/chat", "/api/embeddings", "/api/embed", "/api/tags"):
+        if normalized.endswith(suffix):
+            normalized = normalized[: -len(suffix)]
+            break
+    if not normalized.startswith(("http://", "https://")):
+        normalized = f"http://{normalized}"
+    return normalized.rstrip("/")
+
+
+def preflight_ollama(base_url: str, *, model: str, embedding_model: str) -> str | None:
+    tags_url = f"{base_url.rstrip('/')}/api/tags"
+    timeout = float(os.environ.get("AXIOM_RAGAS_PREFLIGHT_TIMEOUT", "5"))
+    try:
+        with urllib.request.urlopen(tags_url, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8", errors="replace"))
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+        return (
+            f"Ollama is not reachable at {base_url}. Start the Ollama server in this runtime "
+            "or set AXIOM_OLLAMA_BASE_URL to the reachable evaluator endpoint. "
+            f"Original error: {exc}"
+        )
+
+    available = {
+        str(item.get("name") or item.get("model") or "")
+        for item in payload.get("models", [])
+        if isinstance(item, dict)
+    }
+    missing = [
+        candidate
+        for candidate in (model, embedding_model)
+        if available and not ollama_model_available(candidate, available)
+    ]
+    if missing:
+        return (
+            f"Ollama is reachable at {base_url}, but missing model(s): {', '.join(missing)}. "
+            f"Run `ollama pull {missing[0]}` or set --evaluator-model / AXIOM_RAGAS_EMBEDDING_MODEL."
+        )
+    return None
+
+
+def ollama_model_available(model: str, available: set[str]) -> bool:
+    if model in available:
+        return True
+    if ":" not in model and f"{model}:latest" in available:
+        return True
+    return False
+
+
 def apply_official_ragas(
     cases: list[BenchmarkCase],
     results: list[CaseResult],
@@ -314,12 +372,32 @@ def apply_official_ragas(
         if evaluator == "ollama":
             from langchain_ollama import ChatOllama
             from langchain_ollama import OllamaEmbeddings
-            llm = ChatOllama(model=evaluator_model or "qwen2.5:7b")
-            embeddings = OllamaEmbeddings(model="nomic-embed-text")
+            model = evaluator_model or "qwen2.5:7b"
+            base_url = ollama_base_url()
+            embedding_model = os.environ.get("AXIOM_RAGAS_EMBEDDING_MODEL", "nomic-embed-text")
+            preflight_error = preflight_ollama(base_url, model=model, embedding_model=embedding_model)
+            status["model"] = model
+            status["base_url"] = base_url
+            status["embedding_model"] = embedding_model
+            if preflight_error:
+                status["error"] = preflight_error
+                print(f"Ragas evaluator skipped: {preflight_error}")
+                return results, status
+            llm = ChatOllama(model=model, base_url=base_url)
+            embeddings = OllamaEmbeddings(model=embedding_model, base_url=base_url)
         else:
             from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-            llm = ChatOpenAI(model=evaluator_model or "gpt-4o-mini")
-            embeddings = OpenAIEmbeddings()
+            model = evaluator_model or "gpt-4o-mini"
+            base_url = os.environ.get("AXIOM_OPENAI_BASE_URL")
+            status["model"] = model
+            status["base_url"] = base_url or "openai-default"
+            llm_kwargs = {"model": model}
+            embedding_kwargs = {}
+            if base_url:
+                llm_kwargs["base_url"] = base_url
+                embedding_kwargs["base_url"] = base_url
+            llm = ChatOpenAI(**llm_kwargs)
+            embeddings = OpenAIEmbeddings(**embedding_kwargs)
             
     except ImportError as e:
         print(f"Warning: Could not import required eval libraries. Install with pip install -e .[eval] langchain langchain-community. Error: {e}")
@@ -347,7 +425,11 @@ def apply_official_ragas(
         print(f"Running actual Ragas evaluation for {mode} mode with {evaluator} (model={evaluator_model or 'default'})...")
         try:
             from ragas.run_config import RunConfig
-            run_config = RunConfig(timeout=900, max_retries=5, max_workers=1)
+            run_config = RunConfig(
+                timeout=float(os.environ.get("AXIOM_RAGAS_TIMEOUT", "300")),
+                max_retries=int(os.environ.get("AXIOM_RAGAS_MAX_RETRIES", "1")),
+                max_workers=int(os.environ.get("AXIOM_RAGAS_MAX_WORKERS", "2")),
+            )
             eval_result = evaluate(
                 dataset, 
                 metrics=metrics, 

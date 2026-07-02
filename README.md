@@ -211,6 +211,7 @@ dataset = EvaluationDataset.from_jsonl("benchmarks/hiverag_stress_ragas.jsonl")
 ```
 
 For official LLM-judge scoring, use the same benchmark command with `--evaluator ollama --evaluator-model qwen2.5:7b` after the eval dependencies and local model are ready. Official evaluator runs can be slow on CPU-local models.
+If the evaluator is not on the default Ollama endpoint, pass `--evaluator-url http://127.0.0.1:11434` or set `AXIOM_OLLAMA_BASE_URL`. For RAGAS embeddings, pass `--embedding-model nomic-embed-text` or set `AXIOM_RAGAS_EMBEDDING_MODEL`. Axiom preflights Ollama once before starting RAGAS so an unreachable Colab/local endpoint falls back cleanly instead of producing repeated `ConnectError` jobs.
 Use `--case-limit 12` or `--case-offset 12 --case-limit 12` to test the larger dataset in slices.
 
 ## Project Layout

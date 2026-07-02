@@ -22,14 +22,17 @@ from .retrieval import (
     SearchHit,
     coverage_select,
     dense_search,
+    evidence_roles_for_source,
     evidence_search_text,
+    exact_identifier_overlap,
     make_hit,
     reciprocal_rank_fusion,
+    requested_evidence_roles,
     rerank,
 )
 
 
-BIORAG_INDEX_VERSION = "biorag-v4"
+BIORAG_INDEX_VERSION = "hiverag-v0.5"
 HEX_CELL_RADIUS = 0.24
 HEX_DIRECTIONS = ((1, 0), (1, -1), (0, -1), (-1, 0), (-1, 1), (0, 1))
 SPHERE_HONEYCOMB_RINGS = 2
@@ -37,6 +40,12 @@ HEX_EXPANSION_RINGS = 2
 WEB_DAMPING = 0.64
 HEBBIAN_LEARNING_RATE = 0.18
 HEBBIAN_DECAY_HALF_LIFE_DAYS = 21.0
+BEE_MAX_SUPPORT = 96
+BEE_MAX_KEY_TERMS = 128
+BEE_MAX_QUERY_FACETS = 4
+BEE_MAX_PER_FACET = 3
+BEE_ACTIVATION_THRESHOLD = 0.12
+BEE_ROLE_ONLY_THRESHOLD = 0.22
 STOP_TERMS = {
     "about",
     "after",
@@ -82,11 +91,23 @@ class EnergyBudget:
     mode: str
 
 
+@dataclass(frozen=True)
+class BeeActivation:
+    bee_id: str
+    bee_name: str
+    facet_index: int
+    score: float
+    matched_terms: tuple[str, ...]
+    matched_roles: tuple[str, ...]
+
+
 def refresh_biorag_index(conn: sqlite3.Connection, focus_child_ids: list[str] | None = None) -> int:
     build_tree_index(conn)
     build_sphere_index(conn)
     build_sphere_honeycomb(conn)
-    return build_hex_neighbors(conn, focus_child_ids)
+    hex_links = build_hex_neighbors(conn, focus_child_ids)
+    build_bee_index(conn)
+    return hex_links
 
 
 def ensure_biorag_index(conn: sqlite3.Connection) -> None:
@@ -109,8 +130,19 @@ def ensure_biorag_index(conn: sqlite3.Connection) -> None:
         "SELECT COUNT(*) AS count FROM biorag_chunk_cells WHERE index_version = ?",
         (BIORAG_INDEX_VERSION,),
     ).fetchone()["count"]
+    bee_count = conn.execute(
+        "SELECT COUNT(*) AS count FROM biorag_bees WHERE index_version = ?",
+        (BIORAG_INDEX_VERSION,),
+    ).fetchone()["count"]
     sphere_neighbors_ready = sphere_count <= 1 or sphere_neighbor_count > 0
-    if sphere_count and sphere_neighbors_ready and tree_count and hex_count and cell_count >= min(child_count, 160):
+    if (
+        sphere_count
+        and sphere_neighbors_ready
+        and tree_count
+        and hex_count
+        and bee_count
+        and cell_count >= min(child_count, 160)
+    ):
         return
     refresh_biorag_index(conn)
     conn.commit()
@@ -121,29 +153,57 @@ def biorag_search(conn: sqlite3.Connection, query: str, *, top_k: int = 5) -> tu
     budget = energy_budget(query, top_k=top_k)
     paths: dict[str, set[str]] = defaultdict(set)
 
-    dense = dense_search(conn, query, limit=budget.seed_limit)
-    sparse = lexical_search(conn, query, limit=budget.seed_limit)
+    bee_candidates, bee_trace = bee_route(conn, query, top_k=top_k, max_candidates=budget.max_candidates)
+    bee_candidate_ids = [chunk_id for chunk_id, _score in bee_candidates]
+    facet_count = len(bee_trace.get("facets", [])) if isinstance(bee_trace.get("facets"), list) else 0
+    covered_facets = int(bee_trace.get("covered_facets", 0))
+    bee_territory_ready = bool(bee_candidate_ids and covered_facets >= max(facet_count, 1))
+    bee_source_fast_path = bee_territory_ready and is_source_record_query(query)
+    mark_paths(paths, bee_candidates, "bee_router")
+
+    if bee_candidate_ids and covered_facets > 0:
+        dense = dense_search_candidates(conn, query, bee_candidate_ids, limit=budget.seed_limit)
+        sparse = lexical_search_candidates(conn, query, bee_candidate_ids, limit=budget.seed_limit)
+    else:
+        dense = dense_search(conn, query, limit=budget.seed_limit)
+        sparse = lexical_search(conn, query, limit=budget.seed_limit)
     mark_paths(paths, dense, "vector")
     mark_paths(paths, sparse, "lexical")
 
-    sphere = sphere_route(conn, query, limit=budget.sphere_limit)
-    tree = tree_route(conn, query, sphere, limit=budget.tree_limit)
+    if bee_territory_ready:
+        sphere: list[tuple[str, float]] = []
+        tree: list[tuple[str, float]] = []
+    else:
+        sphere = sphere_route(conn, query, limit=budget.sphere_limit)
+        tree = tree_route(conn, query, sphere, limit=budget.tree_limit)
     seed_fused = reciprocal_rank_fusion(
-        [dense, sparse, sphere, tree],
-        weights=[1.1, 1.15, 0.85, 0.9],
+        [bee_candidates, dense, sparse, sphere, tree],
+        weights=[1.2, 1.1, 1.15, 0.85, 0.9],
     )
     mark_paths(paths, sphere, "sphere")
     mark_paths(paths, tree, "tree")
 
-    seeded = rerank(conn, query, seed_fused[: max(top_k * 10, 50)])
-    hexed = hex_expand(conn, seeded, frontier=budget.hex_frontier, limit=max(top_k * 12, 50))
+    seed_window = max(top_k * 5, 24) if bee_source_fast_path else max(top_k * 8, 32) if bee_territory_ready else max(top_k * 10, 50)
+    hex_frontier = 0 if bee_source_fast_path else min(budget.hex_frontier, max(top_k * 2, 8)) if bee_territory_ready else budget.hex_frontier
+    hex_limit = 0 if bee_source_fast_path else min(max(top_k * 12, 50), max(len(bee_candidate_ids) * 3, top_k * 12, 36)) if bee_territory_ready else max(top_k * 12, 50)
+    web_iterations = 0 if bee_source_fast_path else max(1, min(budget.graph_depth, 2)) if bee_territory_ready else budget.graph_depth + 1
+    web_max_candidates = (
+        max(top_k * 8, 32)
+        if bee_source_fast_path
+        else min(budget.max_candidates, max(len(bee_candidate_ids) * 3, top_k * 18, 48))
+        if bee_territory_ready
+        else budget.max_candidates
+    )
+
+    seeded = rerank(conn, query, seed_fused[:seed_window])
+    hexed = [] if bee_source_fast_path else hex_expand(conn, seeded, frontier=hex_frontier, limit=hex_limit)
     mark_paths(paths, hexed, "hex")
 
-    webbed = propagate_web_signal(
+    webbed = [] if bee_source_fast_path else propagate_web_signal(
         conn,
         seeded + hexed,
-        iterations=budget.graph_depth + 1,
-        max_candidates=budget.max_candidates,
+        iterations=web_iterations,
+        max_candidates=web_max_candidates,
     )
     mark_paths(paths, webbed, "spider_signal")
 
@@ -152,8 +212,20 @@ def biorag_search(conn: sqlite3.Connection, query: str, *, top_k: int = 5) -> tu
         weights=[1.25, 0.9, 0.95],
     )
     boosted = apply_adaptive_growth(conn, query, fused, paths)
-    reranked = rerank(conn, query, boosted[: budget.max_candidates])
-    covered_candidates, rescued_ids = coverage_rescue(conn, query, reranked, max_candidates=budget.max_candidates)
+    reranked = precision_boost_candidates(conn, query, rerank(conn, query, boosted[:web_max_candidates]))
+    territory_rescue_ids = (
+        sorted({*bee_candidate_ids, *(chunk_id for chunk_id, _score in reranked[:web_max_candidates])})
+        if bee_territory_ready
+        else None
+    )
+    covered_candidates, rescued_ids = coverage_rescue(
+        conn,
+        query,
+        reranked,
+        max_candidates=web_max_candidates,
+        allowed_chunk_ids=territory_rescue_ids,
+    )
+    covered_candidates = precision_boost_candidates(conn, query, covered_candidates)
     for chunk_id in rescued_ids:
         paths[chunk_id].add("coverage_rescue")
     selected = coverage_select(
@@ -167,9 +239,12 @@ def biorag_search(conn: sqlite3.Connection, query: str, *, top_k: int = 5) -> tu
     if not selected:
         selected = rerank(conn, query, seed_fused[: max(top_k * 4, 20)])[:top_k]
 
+    if is_source_record_query(query):
+        selected = filter_source_record_context(conn, query, selected) or selected
+
     query_id = stable_id("biorag-query", query, *[chunk_id for chunk_id, _ in selected], length=24)
     record_query_context(conn, query_id=query_id, query_text=query, ranked=selected)
-    record_retrieval_run(conn, query_id, query, budget, paths, selected)
+    record_retrieval_run(conn, query_id, query, budget, paths, selected, bee_trace=bee_trace)
     update_adaptive_paths(conn, query, paths, selected)
     update_hebbian_edges(conn, selected)
     conn.commit()
@@ -187,6 +262,7 @@ def biorag_status(conn: sqlite3.Connection) -> dict[str, object]:
         "hex_neighbors": f"SELECT COUNT(*) AS count FROM hex_neighbors WHERE index_version = '{BIORAG_INDEX_VERSION}'",
         "hex_cells": f"SELECT COUNT(*) AS count FROM biorag_hex_cells WHERE index_version = '{BIORAG_INDEX_VERSION}'",
         "chunk_cells": f"SELECT COUNT(*) AS count FROM biorag_chunk_cells WHERE index_version = '{BIORAG_INDEX_VERSION}'",
+        "bees": f"SELECT COUNT(*) AS count FROM biorag_bees WHERE index_version = '{BIORAG_INDEX_VERSION}'",
         "web_links": "SELECT COUNT(*) AS count FROM cross_modal_links",
         "edge_weights": "SELECT COUNT(*) AS count FROM biorag_edge_weights",
         "adaptive_paths": "SELECT COUNT(*) AS count FROM adaptive_path_stats",
@@ -211,6 +287,7 @@ def biorag_status(conn: sqlite3.Connection) -> dict[str, object]:
             and counts["hex_neighbors"]
             and counts["hex_cells"]
             and counts["chunk_cells"]
+            and counts["bees"]
         ),
         "index_version": BIORAG_INDEX_VERSION,
         "counts": counts,
@@ -522,6 +599,244 @@ def insert_sphere_bridge_link(
         """,
         (source, target, min(max(similarity, 0.08), 0.99), now),
     )
+
+
+def build_bee_index(conn: sqlite3.Connection) -> int:
+    spheres = conn.execute(
+        """
+        SELECT *
+        FROM sphere_summaries
+        ORDER BY strength DESC, chunk_count DESC, sphere_name ASC
+        """
+    ).fetchall()
+    conn.execute("DELETE FROM biorag_bees WHERE index_version = ?", (BIORAG_INDEX_VERSION,))
+    if not spheres:
+        return 0
+
+    now = utc_now()
+    sphere_to_bee = {
+        row["sphere_id"]: stable_id("hiverag-bee", BIORAG_INDEX_VERSION, row["sphere_id"], length=24)
+        for row in spheres
+    }
+    inserted = 0
+    for sphere in spheres:
+        support_ids = [chunk_id for chunk_id in json_list(sphere["support_chunk_ids_json"]) if chunk_exists(conn, chunk_id)]
+        if not support_ids:
+            continue
+        support_chunks = [chunk for chunk_id in support_ids[:BEE_MAX_SUPPORT] if (chunk := get_chunk(conn, chunk_id)) is not None]
+        source_roles = sorted({role for chunk in support_chunks for role in source_roles_for_chunk(chunk)})
+        key_text = " ".join(
+            [
+                str(sphere["sphere_name"] or ""),
+                str(sphere["summary_text"] or ""),
+                " ".join(json_list(sphere["topic_terms_json"])),
+                " ".join(source_roles),
+                " ".join(str(chunk["file_name"] or "") for chunk in support_chunks),
+                " ".join(str(chunk["text_content"] or "")[:220] for chunk in support_chunks[:24]),
+            ]
+        )
+        support_identifiers = ordered_unique(
+            [
+                token
+                for chunk in support_chunks
+                for token in identifier_terms(f"{chunk['file_name']} {chunk['text_content']}")
+            ]
+        )
+        bee_terms = ordered_unique(
+            [
+                *support_identifiers,
+                *json_list(sphere["topic_terms_json"]),
+                *key_terms(key_text, limit=48),
+                *source_roles,
+            ]
+        )[:BEE_MAX_KEY_TERMS]
+        neighbor_bees = [
+            sphere_to_bee[row["neighbor_sphere_id"]]
+            for row in conn.execute(
+                """
+                SELECT neighbor_sphere_id
+                FROM sphere_neighbors
+                WHERE sphere_id = ? AND index_version = ?
+                ORDER BY ring ASC, rank ASC
+                LIMIT 12
+                """,
+                (sphere["sphere_id"], BIORAG_INDEX_VERSION),
+            ).fetchall()
+            if row["neighbor_sphere_id"] in sphere_to_bee
+        ]
+        conn.execute(
+            """
+            INSERT INTO biorag_bees (
+                bee_id, bee_name, sphere_id, key_terms_json, source_roles_json,
+                support_chunk_ids_json, neighbor_bee_ids_json, index_version, strength, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(bee_id) DO UPDATE SET
+                bee_name = excluded.bee_name,
+                sphere_id = excluded.sphere_id,
+                key_terms_json = excluded.key_terms_json,
+                source_roles_json = excluded.source_roles_json,
+                support_chunk_ids_json = excluded.support_chunk_ids_json,
+                neighbor_bee_ids_json = excluded.neighbor_bee_ids_json,
+                index_version = excluded.index_version,
+                strength = excluded.strength,
+                updated_at = excluded.updated_at
+            """,
+            (
+                sphere_to_bee[sphere["sphere_id"]],
+                f"{sphere['sphere_name']}-bee",
+                sphere["sphere_id"],
+                json.dumps(bee_terms),
+                json.dumps(source_roles),
+                json.dumps(support_ids[:BEE_MAX_SUPPORT]),
+                json.dumps(neighbor_bees),
+                BIORAG_INDEX_VERSION,
+                float(sphere["strength"] or 1.0),
+                now,
+            ),
+        )
+        inserted += 1
+    return inserted
+
+
+def bee_route(
+    conn: sqlite3.Connection,
+    query: str,
+    *,
+    top_k: int,
+    max_candidates: int,
+) -> tuple[list[tuple[str, float]], dict[str, object]]:
+    bees = conn.execute(
+        """
+        SELECT *
+        FROM biorag_bees
+        WHERE index_version = ?
+        ORDER BY strength DESC, bee_name ASC
+        """,
+        (BIORAG_INDEX_VERSION,),
+    ).fetchall()
+    facets = query_facets(query)
+    trace: dict[str, object] = {
+        "facets": [],
+        "active_bees": [],
+        "active_count": 0,
+        "dormant_bees": len(bees),
+        "covered_facets": 0,
+        "candidate_count": 0,
+    }
+    if not bees or not facets:
+        return [], trace
+
+    active: dict[str, BeeActivation] = {}
+    covered_facets = 0
+    for facet_index, facet in enumerate(facets[:BEE_MAX_QUERY_FACETS]):
+        scored: list[tuple[sqlite3.Row, float, set[str], set[str]]] = []
+        for bee in bees:
+            score, matched_terms, matched_roles = bee_activation_score(bee, facet)
+            if score >= BEE_ACTIVATION_THRESHOLD or (matched_roles and score >= BEE_ROLE_ONLY_THRESHOLD):
+                scored.append((bee, score, matched_terms, matched_roles))
+
+        chosen: list[tuple[sqlite3.Row, float, set[str], set[str]]] = []
+        covered_terms: set[str] = set()
+        covered_roles: set[str] = set()
+        for bee, score, matched_terms, matched_roles in sorted(scored, key=lambda item: item[1], reverse=True):
+            adds_facet_value = bool(
+                (matched_terms - covered_terms)
+                or (matched_roles - covered_roles)
+                or not chosen
+            )
+            if not adds_facet_value:
+                continue
+            chosen.append((bee, score, matched_terms, matched_roles))
+            covered_terms.update(matched_terms)
+            covered_roles.update(matched_roles)
+            if len(chosen) >= BEE_MAX_PER_FACET:
+                break
+            if facet["terms"] <= covered_terms and facet["roles"] <= covered_roles:
+                break
+
+        if chosen:
+            covered_facets += 1
+        trace["facets"].append(
+            {
+                "terms": sorted(facet["terms"]),
+                "roles": sorted(facet["roles"]),
+                "active_bees": [
+                    {
+                        "bee_id": bee["bee_id"],
+                        "bee_name": bee["bee_name"],
+                        "score": round(score, 4),
+                        "matched_terms": sorted(matched_terms),
+                        "matched_roles": sorted(matched_roles),
+                    }
+                    for bee, score, matched_terms, matched_roles in chosen
+                ],
+            }
+        )
+        for bee, score, matched_terms, matched_roles in chosen:
+            current = active.get(bee["bee_id"])
+            if current is None or score > current.score:
+                active[bee["bee_id"]] = BeeActivation(
+                    bee_id=bee["bee_id"],
+                    bee_name=bee["bee_name"],
+                    facet_index=facet_index,
+                    score=score,
+                    matched_terms=tuple(sorted(matched_terms)),
+                    matched_roles=tuple(sorted(matched_roles)),
+                )
+
+    if not active:
+        return [], trace
+
+    bees_by_id = {bee["bee_id"]: bee for bee in bees}
+    overall_terms = set().union(*(facet["terms"] for facet in facets))
+    overall_roles = set().union(*(facet["roles"] for facet in facets))
+    query_tokens = tokenize(query)
+    candidate_scores: dict[str, float] = {}
+    for activation in active.values():
+        bee = bees_by_id[activation.bee_id]
+        for rank, chunk_id in enumerate(json_list(bee["support_chunk_ids_json"])):
+            chunk = get_chunk(conn, chunk_id)
+            if chunk is None or chunk["chunk_kind"] != "child":
+                continue
+            text = evidence_search_text(chunk)
+            chunk_terms = bee_query_terms(text)
+            term_overlap = len(overall_terms & chunk_terms) / max(len(overall_terms), 1) if overall_terms else 0.0
+            chunk_roles = source_roles_for_chunk(chunk)
+            role_overlap = len(overall_roles & chunk_roles) / max(len(overall_roles), 1) if overall_roles else 0.0
+            identifier_overlap = exact_identifier_overlap(query_tokens, text)
+            rank_decay = 1.0 / math.sqrt(rank + 1)
+            score = (
+                activation.score * 0.72
+                + rank_decay * 0.055
+                + term_overlap * 0.18
+                + role_overlap * 0.16
+                + identifier_overlap * 0.22
+            )
+            candidate_scores[chunk_id] = max(candidate_scores.get(chunk_id, 0.0), score)
+
+    ranked = sorted(candidate_scores.items(), key=lambda item: item[1], reverse=True)[:max(max_candidates, top_k * 12)]
+    active_trace = [
+        {
+            "bee_id": activation.bee_id,
+            "bee_name": activation.bee_name,
+            "facet_index": activation.facet_index,
+            "score": round(activation.score, 4),
+            "matched_terms": list(activation.matched_terms),
+            "matched_roles": list(activation.matched_roles),
+        }
+        for activation in sorted(active.values(), key=lambda item: item.score, reverse=True)
+    ]
+    trace.update(
+        {
+            "active_bees": active_trace,
+            "active_count": len(active),
+            "dormant_bees": max(len(bees) - len(active), 0),
+            "covered_facets": covered_facets,
+            "candidate_count": len(ranked),
+        }
+    )
+    return ranked, trace
 
 
 def build_hex_neighbors(
@@ -1214,6 +1529,7 @@ def coverage_rescue(
     candidates: list[tuple[str, float]],
     *,
     max_candidates: int,
+    allowed_chunk_ids: list[str] | None = None,
 ) -> tuple[list[tuple[str, float]], set[str]]:
     query_terms = critical_query_terms(query)
     if not query_terms:
@@ -1226,7 +1542,8 @@ def coverage_rescue(
         return candidates[:max_candidates], set()
 
     rescued: set[str] = set()
-    for row in iter_child_vectors(conn):
+    rescue_rows = child_vectors_for_ids(conn, allowed_chunk_ids) if allowed_chunk_ids is not None else list(iter_child_vectors(conn))
+    for row in rescue_rows:
         chunk = get_chunk(conn, row["chunk_id"])
         if chunk is None:
             continue
@@ -1316,6 +1633,7 @@ def record_retrieval_run(
     budget: EnergyBudget,
     paths: dict[str, set[str]],
     selected: list[tuple[str, float]],
+    bee_trace: dict[str, object] | None = None,
 ) -> None:
     layer_counts = Counter(layer for layers in paths.values() for layer in layers)
     trace = {
@@ -1325,6 +1643,8 @@ def record_retrieval_run(
             for chunk_id, score in selected
         ],
     }
+    if bee_trace is not None:
+        trace["bee_router"] = bee_trace
     conn.execute(
         """
         INSERT OR REPLACE INTO biorag_retrieval_runs (
@@ -1468,19 +1788,278 @@ QUERY_STOP_TERMS = {
     "answer",
     "based",
     "confirm",
+    "data",
     "discuss",
     "discusses",
     "evidence",
     "find",
     "found",
+    "give",
+    "how",
+    "impact",
     "mentions",
+    "need",
+    "needs",
     "question",
+    "show",
     "source",
     "sources",
     "support",
     "supports",
+    "tell",
     "which",
 }
+
+
+BEE_QUERY_STOP_TERMS = QUERY_STOP_TERMS | {
+    "affected",
+    "also",
+    "and",
+    "enter",
+    "for",
+    "record",
+    "records",
+    "recorded",
+    "stuff",
+    "value",
+    "values",
+}
+
+
+def dense_search_candidates(
+    conn: sqlite3.Connection,
+    query: str,
+    chunk_ids: list[str],
+    *,
+    limit: int,
+) -> list[tuple[str, float]]:
+    query_vector = embed_text(query)
+    if not query_vector:
+        return []
+    scored: list[tuple[str, float]] = []
+    for row in child_vectors_for_ids(conn, chunk_ids):
+        score = cosine(query_vector, vector_from_row(row))
+        if score > 0:
+            scored.append((row["chunk_id"], score))
+    return sorted(scored, key=lambda item: item[1], reverse=True)[:limit]
+
+
+def lexical_search_candidates(
+    conn: sqlite3.Connection,
+    query: str,
+    chunk_ids: list[str],
+    *,
+    limit: int,
+) -> list[tuple[str, float]]:
+    query_tokens = tokenize(query)
+    requested_roles = requested_evidence_roles(query_tokens)
+    scored: list[tuple[str, float]] = []
+    for chunk_id in ordered_unique(chunk_ids):
+        chunk = get_chunk(conn, chunk_id)
+        if chunk is None or chunk["chunk_kind"] != "child":
+            continue
+        text = evidence_search_text(chunk)
+        roles = source_roles_for_chunk(chunk)
+        role_overlap = len(requested_roles & roles) / max(len(requested_roles), 1) if requested_roles else 0.0
+        score = (
+            lexical_overlap(query_tokens, text)
+            + exact_identifier_overlap(query_tokens, text) * 0.8
+            + role_overlap * 0.35
+        )
+        if score > 0:
+            scored.append((chunk_id, score))
+    return sorted(scored, key=lambda item: item[1], reverse=True)[:limit]
+
+
+def precision_boost_candidates(
+    conn: sqlite3.Connection,
+    query: str,
+    candidates: list[tuple[str, float]],
+) -> list[tuple[str, float]]:
+    if not candidates:
+        return []
+    query_tokens = tokenize(query)
+    requested_roles = requested_evidence_roles(query_tokens)
+    source_record = is_source_record_query(query)
+    boosted: list[tuple[str, float]] = []
+    for chunk_id, score in candidates:
+        chunk = get_chunk(conn, chunk_id)
+        if chunk is None:
+            continue
+        text = evidence_search_text(chunk)
+        chunk_roles = source_roles_for_chunk(chunk)
+        role_overlap = len(requested_roles & chunk_roles) / max(len(requested_roles), 1) if requested_roles else 0.0
+        identifier_overlap = exact_identifier_overlap(query_tokens, text)
+        exact_anchor_bonus = 0.22 if source_record and query_anchor_terms(query_tokens) & set(tokenize(text)) else 0.0
+        boosted.append(
+            (
+                chunk_id,
+                score
+                + identifier_overlap * (0.72 if source_record else 0.26)
+                + role_overlap * 0.36
+                + exact_anchor_bonus,
+            )
+        )
+    return sorted(boosted, key=lambda item: item[1], reverse=True)
+
+
+def filter_source_record_context(
+    conn: sqlite3.Connection,
+    query: str,
+    selected: list[tuple[str, float]],
+) -> list[tuple[str, float]]:
+    query_terms = bee_query_terms(query)
+    anchors = query_anchor_terms(tokenize(query))
+    if not anchors:
+        return selected
+    filtered: list[tuple[str, float]] = []
+    exact: list[tuple[str, float]] = []
+    for chunk_id, score in selected:
+        chunk = get_chunk(conn, chunk_id)
+        if chunk is None:
+            continue
+        text_terms = bee_query_terms(evidence_search_text(chunk))
+        anchor_match = bool(anchors & text_terms)
+        topic_overlap = len((query_terms - anchors) & text_terms) / max(len(query_terms - anchors), 1)
+        if anchor_match:
+            exact.append((chunk_id, score + 0.12))
+            filtered.append((chunk_id, score + 0.12))
+        elif topic_overlap >= 0.34:
+            filtered.append((chunk_id, score))
+    if not exact:
+        return selected
+    return sorted(ordered_ranked_unique(filtered), key=lambda item: item[1], reverse=True)
+
+
+def is_source_record_query(query: str) -> bool:
+    lowered = query.lower()
+    return (
+        ("which source records" in lowered or "what source records" in lowered)
+        and bool(query_anchor_terms(tokenize(query)))
+    )
+
+
+def query_anchor_terms(query_tokens: list[str]) -> set[str]:
+    return {
+        token
+        for token in query_tokens
+        if any(char.isdigit() for char in token) and ("-" in token or "_" in token)
+    }
+
+
+def identifier_terms(text: str) -> list[str]:
+    return [
+        token
+        for token in tokenize(text)
+        if any(char.isdigit() for char in token) and ("-" in token or "_" in token)
+    ]
+
+
+def child_vectors_for_ids(conn: sqlite3.Connection, chunk_ids: list[str]) -> list[sqlite3.Row]:
+    unique_ids = ordered_unique(chunk_ids)
+    if not unique_ids:
+        return []
+    rows: list[sqlite3.Row] = []
+    for batch in chunked_items(unique_ids):
+        placeholders = ",".join("?" for _ in batch)
+        rows.extend(
+            conn.execute(
+                f"""
+                SELECT c.chunk_id, c.file_id, c.parent_id, c.text_content, c.modality, v.vector_json
+                FROM content_chunks c
+                JOIN chunk_vectors v ON v.chunk_id = c.chunk_id
+                WHERE c.chunk_kind = 'child' AND c.chunk_id IN ({placeholders})
+                """,
+                batch,
+            ).fetchall()
+        )
+    return rows
+
+
+def query_facets(query: str) -> list[dict[str, set[str]]]:
+    normalized = f" {query.lower()} "
+    for connector in (
+        " but also ",
+        " and also ",
+        " as well as ",
+        " along with ",
+        " together with ",
+        " plus ",
+        " and ",
+        ";",
+        ",",
+    ):
+        normalized = normalized.replace(connector, "|")
+    facets: list[dict[str, set[str]]] = []
+    for part in normalized.split("|"):
+        terms = bee_query_terms(part)
+        roles = requested_evidence_roles(tokenize(part))
+        if terms or roles:
+            facets.append({"terms": terms, "roles": roles})
+    if not facets:
+        facets.append({"terms": bee_query_terms(query), "roles": requested_evidence_roles(tokenize(query))})
+    return facets[:BEE_MAX_QUERY_FACETS]
+
+
+def bee_activation_score(
+    bee: sqlite3.Row,
+    facet: dict[str, set[str]],
+) -> tuple[float, set[str], set[str]]:
+    bee_terms = {normalize_token(term) for term in json_list(bee["key_terms_json"])}
+    bee_roles = set(json_list(bee["source_roles_json"]))
+    facet_terms = facet["terms"]
+    facet_roles = facet["roles"]
+    matched_terms = facet_terms & bee_terms
+    matched_roles = facet_roles & bee_roles
+
+    term_score = len(matched_terms) / max(min(len(facet_terms), 6), 1) if facet_terms else 0.0
+    role_score = len(matched_roles) / max(len(facet_roles), 1) if facet_roles else 0.0
+    identifier_bonus = 0.08 if any(any(char.isdigit() for char in term) for term in matched_terms) else 0.0
+    bonded_bonus = 0.045 if matched_terms and (matched_roles or not facet_roles) else 0.0
+    strength_bonus = min(float(bee["strength"] or 1.0), 3.0) * 0.012
+    score = term_score * 0.72 + role_score * 0.26 + identifier_bonus + bonded_bonus + strength_bonus
+    return score, matched_terms, matched_roles
+
+
+def bee_query_terms(text: str) -> set[str]:
+    return {
+        normalize_token(token)
+        for token in tokenize(text)
+        if len(token) >= 3 and token not in STOP_TERMS and token not in BEE_QUERY_STOP_TERMS
+    }
+
+
+def source_roles_for_chunk(row: sqlite3.Row) -> set[str]:
+    return evidence_roles_for_source(
+        file_name=str(row["file_name"] or ""),
+        file_type=str(row["file_type"] or ""),
+        modality=str(row["modality"] or ""),
+    )
+
+
+def ordered_unique(items: list[str] | tuple[str, ...]) -> list[str]:
+    seen: set[str] = set()
+    unique: list[str] = []
+    for item in items:
+        value = str(item)
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        unique.append(value)
+    return unique
+
+
+def ordered_ranked_unique(items: list[tuple[str, float]]) -> list[tuple[str, float]]:
+    scores: dict[str, float] = {}
+    order: list[str] = []
+    for chunk_id, score in items:
+        if chunk_id not in scores:
+            order.append(chunk_id)
+            scores[chunk_id] = score
+        else:
+            scores[chunk_id] = max(scores[chunk_id], score)
+    return [(chunk_id, scores[chunk_id]) for chunk_id in order]
+
 
 def query_signature(query: str) -> str:
     terms = key_terms(query, limit=8)
